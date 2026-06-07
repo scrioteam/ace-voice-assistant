@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ACE Demo Console</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body class="demo-page">
+  <main class="demo-shell">
+    <header class="demo-header">
+      <div>
+        <div class="panel-kicker">ACE Store-Owner Demo</div>
+        <h1>קונסולת מציג</h1>
+      </div>
+      <nav class="demo-nav">
+        <a href="/" target="_blank">לקוח</a>
+        <button id="open-screens" type="button">פתח מסכים</button>
+        <button id="reset-demo" type="button">איפוס דמו</button>
+      </nav>
+    </header>
+
+    <section class="demo-actions">
+      <button id="preload-sofa" type="button">הכן תרחיש ספה</button>
+      <button id="refresh-catalog" type="button">רענן ספות מ-ACE</button>
+      <span id="demo-status">רק המסך ליד האינסטלציה פנוי כברירת מחדל.</span>
+    </section>
+
+    <section>
+      <h2>מסכי חנות</h2>
+      <div id="screens-grid" class="screens-grid"></div>
+    </section>
+
+    <section class="talk-track">
+      <h2>קו הדגמה</h2>
+      <ol>
+        <li>פותחים את מסך הלקוח ואת מסכי החנות.</li>
+        <li>הלקוח מבקש ספה, והיועץ שואל תקציב וצורך.</li>
+        <li>היועץ ממליץ, משווה, ומקצה אוטומטית את המסך הפנוי.</li>
+        <li>המסך הגדול מציג מוצרים, מחיר, זמינות וקישור רכישה.</li>
+      </ol>
+    </section>
+  </main>
+  <script src="/static/demo.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: ace-voice-assistant-demo
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /healthz
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_REALTIME_MODEL
+        value: gpt-realtime-2
+      - key: OPENAI_TRANSCRIPTION_MODEL
+        value: gpt-4o-mini-transcribe
