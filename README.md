@@ -57,6 +57,17 @@ This app is ready for a single web-service deployment. Render is the recommended
 
 The idle store screen QR opens the website/customer assistant. Screen assignment is still automatic by availability when the assistant pushes a product to a screen.
 
+### Render Without GitHub App Access
+
+If Render cannot access the GitHub repo, deploy the included Docker image instead:
+
+```bash
+docker build -t ghcr.io/scrioteam/ace-voice-assistant:latest .
+docker push ghcr.io/scrioteam/ace-voice-assistant:latest
+```
+
+Then create a Render web service from the image URL and set the same environment variables listed above. This avoids Render GitHub App authorization issues.
+
 ### Generic Python Host
 
 Use the included `Procfile` or start command:
