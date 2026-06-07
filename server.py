@@ -776,7 +776,7 @@ async def demo_chat(request: Request) -> Dict[str, Any]:
     if memory["stage"] == "new" and any(term in lower for term in ["ספה", "sofa", "couch", "סלון"]):
         memory["stage"] = "qualified"
         return {
-            "message": "בשמחה. כדי לא לזרוק לך סתם מוצרים: מה התקציב בערך, והאם חשוב שהספה תיפתח למיטה?",
+            "message": "בשמחה. כדי להתאים לך ספה שתסגור גם מראה וגם שימוש: מה התקציב בערך, והאם חשוב שהיא תיפתח למיטה?",
             "stage": memory["stage"],
         }
 
