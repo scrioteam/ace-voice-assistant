@@ -375,12 +375,23 @@
     );
   }
 
+  function isLikelyMobileOrTouch() {
+    const ua = navigator.userAgent || "";
+    return /Android|iPhone|iPad|iPod|Mobile/i.test(ua)
+      || (navigator.maxTouchPoints && navigator.maxTouchPoints > 1 && Math.min(window.innerWidth, window.innerHeight) < 900);
+  }
+
+  function shouldPreferRecorder() {
+    return supportsPushToTalkRecording() && isLikelyMobileOrTouch();
+  }
+
   function preferredRecordingMimeType() {
     if (!window.MediaRecorder || !MediaRecorder.isTypeSupported) return "";
     return [
+      "audio/mp4;codecs=mp4a.40.2",
+      "audio/mp4",
       "audio/webm;codecs=opus",
       "audio/webm",
-      "audio/mp4",
       "audio/ogg;codecs=opus",
     ].find((type) => MediaRecorder.isTypeSupported(type)) || "";
   }
@@ -446,13 +457,14 @@
         cleanupRecording();
         transcribeRecording(blob);
       };
-      mediaRecorder.start();
+      mediaRecorder.start(250);
       recording = true;
       voiceStatus.textContent = "מקליט בעברית; לחץ שוב לסיום";
       setMicState("listening");
       recordingTimer = setTimeout(() => {
         if (recording && mediaRecorder && mediaRecorder.state === "recording") {
           voiceStatus.textContent = "מפענח דיבור בעברית";
+          if (mediaRecorder.requestData) mediaRecorder.requestData();
           mediaRecorder.stop();
         }
       }, 8000);
@@ -475,6 +487,7 @@
     voiceStatus.textContent = "מפענח דיבור בעברית";
     setMicState("speaking");
     if (mediaRecorder.state === "recording") {
+      if (mediaRecorder.requestData) mediaRecorder.requestData();
       mediaRecorder.stop();
     } else {
       cleanupRecording();
@@ -554,12 +567,14 @@
   }
 
   function voiceStatusLabel() {
+    if (shouldPreferRecorder()) return "לחץ להקלטה בעברית; לחץ שוב לסיום";
     if (getSpeechRecognitionConstructor()) return "לחץ ודבר בעברית";
     if (supportsPushToTalkRecording()) return "לחץ להקלטה בעברית; לחץ שוב לסיום";
     return "קול מוגבל בדפדפן הזה; הדמו הכתוב זמין";
   }
 
   function currentVoiceMode() {
+    if (shouldPreferRecorder()) return "mobile-push-to-talk-transcription";
     if (getSpeechRecognitionConstructor()) return "browser-speech-recognition";
     if (supportsPushToTalkRecording()) return "push-to-talk-transcription";
     return "realtime-fallback";
@@ -578,6 +593,8 @@
     if (connected || pc) {
       stopVoice();
       voiceStatus.textContent = "קול כבוי";
+    } else if (shouldPreferRecorder() && !event.shiftKey) {
+      startPushToTalkRecording();
     } else if (getSpeechRecognitionConstructor() && !event.shiftKey) {
       startSpeechRecognition();
     } else if (supportsPushToTalkRecording() && !event.shiftKey) {

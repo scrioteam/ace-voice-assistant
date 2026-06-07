@@ -901,8 +901,10 @@ async def transcribe_audio(request: Request, session_id: str = "ace-demo") -> Di
         raise HTTPException(status_code=400, detail="Audio recording is too short")
 
     content_type = request.headers.get("content-type") or "audio/webm"
-    if "mp4" in content_type or "m4a" in content_type:
+    if "mp4" in content_type or "m4a" in content_type or "aac" in content_type:
         filename = "speech.m4a"
+    elif "mpeg" in content_type or "mp3" in content_type:
+        filename = "speech.mp3"
     elif "wav" in content_type:
         filename = "speech.wav"
     elif "ogg" in content_type:
