@@ -12,42 +12,52 @@
 <body class="customer-page">
   <iframe id="ace-frame" src="/proxy/" title="ACE"></iframe>
 
-  <aside class="assistant-panel" aria-label="יועץ המכירות של ACE">
+  <button id="assistant-launcher" type="button" class="assistant-launcher" aria-label="פתיחת יועץ המכירות" hidden>
+    <span>ACE</span>
+  </button>
+
+  <aside id="assistant-panel" class="assistant-panel" aria-label="יועץ המכירות של ACE">
     <header class="panel-header">
       <div>
         <div class="panel-kicker">ACE</div>
         <h1>יועץ מכירות</h1>
       </div>
-      <span id="connection-status" class="status-pill">דמו מוכן</span>
+      <div class="panel-header-actions">
+        <span id="connection-status" class="status-pill">דמו מוכן</span>
+        <button id="assistant-minimize" type="button" class="panel-icon-button" aria-label="מזעור היועץ">−</button>
+        <button id="assistant-close" type="button" class="panel-icon-button" aria-label="סגירת היועץ">×</button>
+      </div>
     </header>
 
-    <div id="transcript" class="transcript" aria-live="polite"></div>
-    <div id="product-strip" class="product-strip" hidden></div>
+    <div class="assistant-content">
+      <div id="transcript" class="transcript" aria-live="polite"></div>
+      <div id="product-strip" class="product-strip" hidden></div>
 
-    <div class="quick-actions">
-      <button type="button" data-demo="אני מחפש ספה לסלון">לקוח מחפש ספה</button>
-      <button type="button" data-demo="עד 3000 שקל, עדיף נפתחת למיטה ובצבע רגוע">תקציב וצורך</button>
-      <button type="button" data-demo="תשווה לי את האפשרויות על המסך הגדול">השוואה במסך</button>
+      <div class="quick-actions">
+        <button type="button" data-demo="אני מחפש ספה לסלון">לקוח מחפש ספה</button>
+        <button type="button" data-demo="עד 3000 שקל, עדיף נפתחת למיטה ובצבע רגוע">תקציב וצורך</button>
+        <button type="button" data-demo="תשווה לי את האפשרויות על המסך הגדול">השוואה במסך</button>
+      </div>
+
+      <form id="chat-form" class="chat-form">
+        <input id="chat-input" type="text" autocomplete="off" placeholder="כתוב או דבר עם יועץ המכירות">
+        <button type="submit">שלח</button>
+      </form>
+
+      <footer class="voice-row">
+        <button id="mic-button" type="button" class="mic-button" aria-label="התחלת שיחה קולית">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"></path>
+            <path d="M19 11a7 7 0 0 1-14 0"></path>
+            <path d="M12 18v3"></path>
+            <path d="M8 21h8"></path>
+          </svg>
+        </button>
+        <div id="voice-status" class="voice-status">לחץ ודבר בעברית</div>
+      </footer>
     </div>
-
-    <form id="chat-form" class="chat-form">
-      <input id="chat-input" type="text" autocomplete="off" placeholder="כתוב או דבר עם יועץ המכירות">
-      <button type="submit">שלח</button>
-    </form>
-
-    <footer class="voice-row">
-      <button id="mic-button" type="button" class="mic-button" aria-label="התחלת שיחה קולית">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"></path>
-          <path d="M19 11a7 7 0 0 1-14 0"></path>
-          <path d="M12 18v3"></path>
-          <path d="M8 21h8"></path>
-        </svg>
-      </button>
-      <div id="voice-status" class="voice-status">לחץ ודבר בעברית</div>
-    </footer>
   </aside>
 
-  <script src="/static/customer.js?v=mobile-voice-1"></script>
+  <script src="/static/customer.js?v=realtime-panel-1"></script>
 </body>
 </html>

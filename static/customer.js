@@ -6,6 +6,10 @@
   const connectionStatus = document.getElementById("connection-status");
   const voiceStatus = document.getElementById("voice-status");
   const micButton = document.getElementById("mic-button");
+  const assistantPanel = document.getElementById("assistant-panel");
+  const assistantLauncher = document.getElementById("assistant-launcher");
+  const assistantMinimize = document.getElementById("assistant-minimize");
+  const assistantClose = document.getElementById("assistant-close");
   const sessionId = localStorage.getItem("ace_demo_session") || crypto.randomUUID();
   localStorage.setItem("ace_demo_session", sessionId);
 
@@ -24,6 +28,7 @@
   let recordedChunks = [];
   let recording = false;
   let recordingTimer = null;
+  let realtimeFailedOnce = false;
 
   function money(value) {
     const amount = Number(value || 0);
@@ -169,6 +174,29 @@
     button.addEventListener("click", () => sendDemoText(button.dataset.demo));
   });
 
+  function setAssistantPanelState(state) {
+    const value = state === "closed" || state === "minimized" ? state : "open";
+    assistantPanel.classList.toggle("is-minimized", value === "minimized");
+    assistantPanel.classList.toggle("is-hidden", value === "closed");
+    assistantLauncher.hidden = value !== "closed";
+    assistantMinimize.textContent = value === "minimized" ? "+" : "−";
+    assistantMinimize.setAttribute("aria-label", value === "minimized" ? "פתיחת היועץ" : "מזעור היועץ");
+    localStorage.setItem("ace_assistant_panel_state", value);
+  }
+
+  assistantMinimize.addEventListener("click", () => {
+    const next = assistantPanel.classList.contains("is-minimized") ? "open" : "minimized";
+    setAssistantPanelState(next);
+  });
+
+  assistantClose.addEventListener("click", () => {
+    stopVoice();
+    if (recording) stopPushToTalkRecording();
+    setAssistantPanelState("closed");
+  });
+
+  assistantLauncher.addEventListener("click", () => setAssistantPanelState("open"));
+
   function setMicState(state) {
     micButton.classList.toggle("listening", state === "listening");
     micButton.classList.toggle("speaking", state === "speaking");
@@ -270,7 +298,7 @@
   }
 
   async function startVoice() {
-    voiceStatus.textContent = "מתחבר לקול";
+    voiceStatus.textContent = "מתחבר ל-GPT Realtime";
     setMicState("listening");
     try {
       pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
@@ -290,7 +318,8 @@
       dc = pc.createDataChannel("oai-events");
       dc.addEventListener("open", () => {
         connected = true;
-        voiceStatus.textContent = "מחובר לקול";
+        realtimeFailedOnce = false;
+        voiceStatus.textContent = "מחובר ל-GPT Realtime";
         setMicState("listening");
         dc.send(JSON.stringify({
           type: "conversation.item.create",
@@ -317,7 +346,13 @@
       } else if (message.includes("OPENAI_API_KEY")) {
         voiceStatus.textContent = "אין מפתח OpenAI; השתמש בדמו הכתוב";
       } else {
-        voiceStatus.textContent = "קול לא זמין: " + message;
+        realtimeFailedOnce = true;
+        if (supportsPushToTalkRecording()) {
+          voiceStatus.textContent = "Realtime לא זמין כאן; עובר להקלטה";
+          await startPushToTalkRecording();
+        } else {
+          voiceStatus.textContent = "קול לא זמין: " + message;
+        }
       }
     }
   }
@@ -364,6 +399,14 @@
     remoteAudio = null;
     connected = false;
     setMicState("idle");
+  }
+
+  function supportsRealtimeVoice() {
+    return Boolean(
+      window.RTCPeerConnection
+      && navigator.mediaDevices
+      && navigator.mediaDevices.getUserMedia
+    );
   }
 
   function supportsPushToTalkRecording() {
@@ -567,6 +610,7 @@
   }
 
   function voiceStatusLabel() {
+    if (supportsRealtimeVoice()) return "לחץ להתחברות ל-GPT Realtime";
     if (shouldPreferRecorder()) return "לחץ להקלטה בעברית; לחץ שוב לסיום";
     if (getSpeechRecognitionConstructor()) return "לחץ ודבר בעברית";
     if (supportsPushToTalkRecording()) return "לחץ להקלטה בעברית; לחץ שוב לסיום";
@@ -574,6 +618,7 @@
   }
 
   function currentVoiceMode() {
+    if (supportsRealtimeVoice() && !realtimeFailedOnce) return "gpt-realtime-voice";
     if (shouldPreferRecorder()) return "mobile-push-to-talk-transcription";
     if (getSpeechRecognitionConstructor()) return "browser-speech-recognition";
     if (supportsPushToTalkRecording()) return "push-to-talk-transcription";
@@ -593,6 +638,8 @@
     if (connected || pc) {
       stopVoice();
       voiceStatus.textContent = "קול כבוי";
+    } else if (supportsRealtimeVoice() && !event.shiftKey) {
+      startVoice();
     } else if (shouldPreferRecorder() && !event.shiftKey) {
       startPushToTalkRecording();
     } else if (getSpeechRecognitionConstructor() && !event.shiftKey) {
@@ -610,6 +657,7 @@
   }
   window.__aceVoiceMode = currentVoiceMode();
   document.documentElement.dataset.aceVoiceMode = window.__aceVoiceMode;
+  setAssistantPanelState(localStorage.getItem("ace_assistant_panel_state") || "open");
   voiceStatus.textContent = voiceStatusLabel();
   addMessage("assistant", "שלום, אני יועץ המכירות של ACE. אפשר להתחיל בתרחיש הספה או לשאול על מוצר.");
 })();
