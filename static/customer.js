@@ -55,6 +55,27 @@
     transcript.scrollTop = transcript.scrollHeight;
   }
 
+  function containsHebrewText(text) {
+    return /[\u0590-\u05ff]/.test(String(text || ""));
+  }
+
+  function hasStrongForeignScript(text) {
+    const value = String(text || "");
+    const foreignMatches = value.match(/[\u0400-\u04ff\u0600-\u06ff]/g) || [];
+    const letters = value.match(/[A-Za-z\u0590-\u05ff\u0400-\u04ff\u0600-\u06ff]/g) || [];
+    return foreignMatches.length >= 3 && foreignMatches.length / Math.max(letters.length, 1) > 0.35;
+  }
+
+  function addUserTranscript(text) {
+    const value = String(text || "").trim();
+    if (!value) return;
+    if (!containsHebrewText(value) && hasStrongForeignScript(value)) {
+      addMessage("user", "בקשה קולית התקבלה");
+      return;
+    }
+    addMessage("user", value);
+  }
+
   function renderProducts(products) {
     const list = Array.isArray(products) ? products : [];
     productStrip.hidden = list.length === 0;
@@ -179,7 +200,7 @@
     assistantPanel.classList.toggle("is-minimized", value === "minimized");
     assistantPanel.classList.toggle("is-hidden", value === "closed");
     assistantLauncher.hidden = value !== "closed";
-    assistantMinimize.textContent = value === "minimized" ? "+" : "−";
+    assistantMinimize.textContent = value === "minimized" ? "פתח" : "מזער";
     assistantMinimize.setAttribute("aria-label", value === "minimized" ? "פתיחת היועץ" : "מזעור היועץ");
     localStorage.setItem("ace_assistant_panel_state", value);
   }
@@ -281,7 +302,7 @@
       userBuffer += event.delta || "";
     }
     if (event.type === "conversation.item.input_audio_transcription.completed") {
-      addMessage("user", event.transcript || userBuffer);
+      addUserTranscript(event.transcript || userBuffer);
       userBuffer = "";
     }
     if (event.type === "response.done") {

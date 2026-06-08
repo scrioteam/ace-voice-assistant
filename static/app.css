@@ -56,10 +56,15 @@ button { cursor: pointer; }
 }
 
 .assistant-panel.is-minimized {
-  width: min(300px, calc(100vw - 28px));
+  width: min(330px, calc(100vw - 28px));
+  padding: 12px;
 }
 
 .assistant-panel.is-minimized .assistant-content {
+  display: none;
+}
+
+.assistant-panel.is-minimized .status-pill {
   display: none;
 }
 
@@ -103,9 +108,9 @@ button { cursor: pointer; }
   gap: 6px;
 }
 
-.panel-icon-button {
-  width: 30px;
-  height: 30px;
+.panel-text-button {
+  min-width: 54px;
+  min-height: 32px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -113,12 +118,13 @@ button { cursor: pointer; }
   border-radius: 6px;
   background: #fff;
   color: var(--ink);
-  font-size: 20px;
+  padding: 4px 9px;
+  font-size: 13px;
   font-weight: 800;
   line-height: 1;
 }
 
-.panel-icon-button:hover {
+.panel-text-button:hover {
   border-color: var(--ace-red);
   color: var(--ace-red);
 }
