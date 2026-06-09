@@ -34,6 +34,7 @@ Open:
 - `GET /api/catalog/audit?sample_size=5&strategy=spread&verify_search=true&refresh=true` samples live sitemap products across the catalog and verifies they resolve through ACE product pages and assistant search.
 - `GET /api/catalog/readiness?sample_size=3&refresh=true` summarizes whether live ACE access, sampled resolution/search, and live-only search are healthy.
 - `GET /api/products/search?q=...&live_only=true&include_meta=true` proves a search result came from live ACE access instead of demo fallback data.
+- Live ACE sitemap/search data is kept in memory only and is not written as a local product catalog copy.
 - Product images are cached under `data/image_cache` after first successful fetch.
 
 ## Tests

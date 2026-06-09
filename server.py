@@ -451,6 +451,18 @@ class AceLiveCatalog:
                     self.sitemap_products = []
         return self.sitemap_products
 
+    def cache_metadata(self) -> Dict[str, Any]:
+        return {
+            "mode": "memory_only",
+            "persisted": False,
+            "disk_path": None,
+            "ttl_seconds": 6 * 60 * 60,
+            "source_url": ACE_SITEMAP_URL,
+            "product_count": len(self.sitemap_products),
+            "loaded": bool(self.sitemap_products),
+            "age_seconds": int(now() - self.sitemap_loaded_at) if self.sitemap_loaded_at else None,
+        }
+
     async def status(self, refresh: bool = False) -> Dict[str, Any]:
         if refresh:
             self.sitemap_loaded_at = 0.0
@@ -472,6 +484,7 @@ class AceLiveCatalog:
             "sitemap_product_count": len(products),
             "sitemap_loaded": bool(products),
             "sitemap_age_seconds": int(now() - self.sitemap_loaded_at) if self.sitemap_loaded_at else None,
+            "cache": self.cache_metadata(),
             "sample_products": [product.public() for product in sample],
         }
 
@@ -985,6 +998,7 @@ async def live_catalog_readiness(
             "local_fallback_source": catalog.loaded_from,
             "used_for_readiness": False,
         },
+        "live_cache": live_catalog.cache_metadata(),
     }
 
 

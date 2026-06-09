@@ -127,6 +127,12 @@ def test_catalog_status_reports_live_catalog(monkeypatch):
                 "category_count": 860,
                 "sitemap_product_count": 33458,
                 "sitemap_loaded": True,
+                "cache": {
+                    "mode": "memory_only",
+                    "persisted": False,
+                    "disk_path": None,
+                    "source_url": server.ACE_SITEMAP_URL,
+                },
                 "sample_products": [],
                 "refresh": refresh,
             }
@@ -138,7 +144,24 @@ def test_catalog_status_reports_live_catalog(monkeypatch):
     assert data["local_fallback_products"] >= 1
     assert data["live_catalog"]["category_count"] == 860
     assert data["live_catalog"]["sitemap_product_count"] == 33458
+    assert data["live_catalog"]["cache"]["mode"] == "memory_only"
+    assert data["live_catalog"]["cache"]["persisted"] is False
     assert data["live_catalog"]["refresh"] is True
+
+
+def test_live_catalog_cache_metadata_is_memory_only():
+    live = server.AceLiveCatalog()
+    live.sitemap_products = [
+        server.Product(sku="4440328", title="פוף Matera", url="https://www.ace.co.il/4440328")
+    ]
+    live.sitemap_loaded_at = server.now()
+    metadata = live.cache_metadata()
+    assert metadata["mode"] == "memory_only"
+    assert metadata["persisted"] is False
+    assert metadata["disk_path"] is None
+    assert metadata["source_url"] == server.ACE_SITEMAP_URL
+    assert metadata["product_count"] == 1
+    assert metadata["loaded"] is True
 
 
 def test_catalog_readiness_reports_healthy_live_path(monkeypatch):
@@ -162,6 +185,14 @@ def test_catalog_readiness_reports_healthy_live_path(monkeypatch):
         async def get(self, sku):
             return None
 
+        def cache_metadata(self):
+            return {
+                "mode": "memory_only",
+                "persisted": False,
+                "disk_path": None,
+                "source_url": server.ACE_SITEMAP_URL,
+            }
+
     monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
     response = client.get("/api/catalog/readiness", params={"sample_size": 1, "query": "פוף Matera"})
     assert response.status_code == 200
@@ -171,6 +202,8 @@ def test_catalog_readiness_reports_healthy_live_path(monkeypatch):
     assert data["live_only_search"]["source"] == "live"
     assert data["live_only_search"]["fallback_used"] is False
     assert data["fallback"]["used_for_readiness"] is False
+    assert data["live_cache"]["mode"] == "memory_only"
+    assert data["live_cache"]["persisted"] is False
 
 
 def test_catalog_readiness_fails_when_samples_are_not_searchable(monkeypatch):
@@ -193,6 +226,14 @@ def test_catalog_readiness_fails_when_samples_are_not_searchable(monkeypatch):
 
         async def get(self, sku):
             return None
+
+        def cache_metadata(self):
+            return {
+                "mode": "memory_only",
+                "persisted": False,
+                "disk_path": None,
+                "source_url": server.ACE_SITEMAP_URL,
+            }
 
     monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
     response = client.get("/api/catalog/readiness", params={"sample_size": 1})
