@@ -483,6 +483,23 @@ class AceLiveCatalog:
         candidates = [product for _, product in scored[start : start + result_limit]]
         return await self.enrich_sitemap_products(candidates)
 
+    async def browse_sitemap_products(self, page: int = 1, limit: int = 12, query: str = "") -> List[Product]:
+        result_limit = max(1, min(limit, 30))
+        products = await self.load_sitemap_products()
+        if query:
+            terms = expand_query(query)
+            scored = [
+                (score_product(product, terms), product)
+                for product in products
+                if product_matches_terms(product, terms)
+            ]
+            products = [
+                product
+                for score, product in sorted(scored, key=lambda item: (-item[0], item[1].title))
+            ]
+        start = (normalized_page(page) - 1) * result_limit
+        return await self.enrich_sitemap_products(products[start : start + result_limit])
+
     async def enrich_sitemap_products(self, products: List[Product]) -> List[Product]:
         if not products:
             return []
@@ -604,6 +621,7 @@ class AceLiveCatalog:
         refresh: bool = False,
         strategy: str = "slice",
         verify_search: bool = False,
+        search_pages: int = 1,
     ) -> Dict[str, Any]:
         if refresh:
             self.sitemap_loaded_at = 0.0
@@ -619,6 +637,7 @@ class AceLiveCatalog:
                 "resolved_count": 0,
                 "failed_count": 0,
                 "search_verified": bool(verify_search),
+                "search_pages": max(1, min(search_pages, 10)),
                 "search_matched_count": 0,
                 "search_failed_count": 0,
                 "resolved_products": [],
@@ -628,6 +647,7 @@ class AceLiveCatalog:
         size = max(1, min(sample_size, 25))
         start = max(0, min(offset, len(products) - 1))
         strategy_value = normalize_audit_strategy(strategy)
+        pages_to_check = max(1, min(search_pages, 10))
         indexes = catalog_audit_indexes(len(products), size, start, strategy_value)
         sample = [products[index] for index in indexes]
 
@@ -641,11 +661,25 @@ class AceLiveCatalog:
             }
             if verify_search:
                 query = product.title
-                search_hits = await self.search(query, limit=5) if query else []
                 result["search_query"] = query
                 expected_sku = sku_key(product.sku)
-                result["search_matched"] = any(sku_key(hit.sku) == expected_sku for hit in search_hits)
-                result["search_result_skus"] = [hit.sku for hit in search_hits]
+                result["search_pages_checked"] = pages_to_check
+                result["search_matched"] = False
+                result["search_matched_page"] = None
+                result["search_result_skus_by_page"] = {}
+                if query:
+                    for page in range(1, pages_to_check + 1):
+                        search_hits = await self.search(query, limit=10, page=page)
+                        result["search_result_skus_by_page"][str(page)] = [hit.sku for hit in search_hits]
+                        if any(sku_key(hit.sku) == expected_sku for hit in search_hits):
+                            result["search_matched"] = True
+                            result["search_matched_page"] = page
+                            break
+                result["search_result_skus"] = [
+                    sku
+                    for skus in result["search_result_skus_by_page"].values()
+                    for sku in skus
+                ]
             return result
 
         checked = await asyncio.gather(*(resolve(product) for product in sample))
@@ -663,6 +697,7 @@ class AceLiveCatalog:
             "resolved_count": len(resolved),
             "failed_count": len(failed),
             "search_verified": bool(verify_search),
+            "search_pages": pages_to_check,
             "search_matched_count": len(search_results) - len(search_failed),
             "search_failed_count": len(search_failed),
             "resolved_products": resolved,
@@ -748,6 +783,13 @@ def asks_for_more_products(text: str) -> bool:
             "another",
         ]
     )
+
+
+def product_matches_terms(product: Product, terms: List[str]) -> bool:
+    if not terms:
+        return True
+    blob = product.search_blob()
+    return any(term and term in blob for term in terms)
 
 
 def rank_products_for_query(products: List[Product], query: str) -> List[Product]:
@@ -1168,12 +1210,14 @@ async def live_catalog_readiness(
     query: str = "פוף Matera",
     min_products: int = 1000,
     refresh: bool = False,
+    search_pages: int = 3,
 ) -> Dict[str, Any]:
     audit = await live_catalog.audit(
         sample_size=sample_size,
         strategy="spread",
         refresh=refresh,
         verify_search=True,
+        search_pages=search_pages,
     )
     search = await search_catalog_with_source(query, limit=3, live_only=True)
     checks = {
@@ -1201,6 +1245,7 @@ async def live_catalog_readiness(
             "failed_count": audit["failed_count"],
             "search_matched_count": audit["search_matched_count"],
             "search_failed_count": audit["search_failed_count"],
+            "search_pages": audit["search_pages"],
         },
         "fallback": {
             "local_fallback_products": len(catalog.products),
@@ -1357,6 +1402,7 @@ SYSTEM_PROMPT = """
 - כשלקוח מבקש מוצר, שאלי עד שתי שאלות קנייה חסרות: תקציב, מידה, שימוש, צבע, דחיפות או צורך במשלוח.
 - אחרי שיש מספיק מידע, הציגי 2-3 מוצרים אמיתיים מתוצאות live של כלי search_products או get_product_details בלבד. לעולם אל תמציאי מוצר, מחיר, מלאי או קישור.
 - שמרי את החיפוש האחרון: query/category/filters/page. כשהלקוח מבקש "עוד", "אפשרויות נוספות" או "הבא", קראי שוב ל-search_products עם אותם פילטרים ו-page גדול ב-1 במקום להתחיל חיפוש חדש.
+- אם חיפוש לפי טקסט לא מספיק או צריך להראות רוחב קטלוג, השתמשי ב-browse_products כדי לדפדף באינדקס המוצרים החי של ACE לפי עמודים. גם כאן הציגי רק מוצרים שחזרו מהכלי.
 - אם כלי מוצר מחזיר fallback_used=true, source שאינו live, או שגיאה, אל תציגי את המוצר כהמלצה אמיתית; אמרי שלא מצאת תוצאה חיה מספיק טובה ובקשי ניסוח/קטגוריה אחרת.
 - ברירת המחדל היא ייעוץ מכירתי רגוע: הדגישי התאמה לצורך, מבצע, זמינות אונליין ושימושיות בלי לחץ ובלי ניסוחים אגרסיביים.
 - אל תתנדבי לדבר על חסרונות או מחיר גבוה. אם הלקוח מבקש במפורש, מסגרי את זה כהתאמה לצורך: "אם החלל קטן", "אם התקציב הוא השיקול המרכזי", "אם חשוב אירוח"; בלי לתייג מוצר כיקר.
@@ -1380,6 +1426,20 @@ TOOLS = [
                 "max_price": {"type": "number"},
                 "limit": {"type": "integer"},
                 "page": {"type": "integer", "description": "מספר עמוד תוצאות באתר ACE כאשר הלקוח מבקש עוד אפשרויות"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "type": "function",
+        "name": "browse_products",
+        "description": "דפדוף ישיר באינדקס המוצרים החי של ACE כפי שמפורסם בסייטמאפ האתר. השתמשי בזה כאשר צריך לעבור על עוד מוצרים מעבר לתוצאות החיפוש או להראות שהקטלוג הרחב זמין. מחזיר רק מוצרים חיים מ-ACE, לא fallback.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "page": {"type": "integer"},
+                "limit": {"type": "integer"},
+                "query": {"type": "string", "description": "אופציונלי: סינון/דירוג לפי צורך או קטגוריה"},
             },
             "required": [],
         },
@@ -1490,6 +1550,7 @@ async def catalog_audit(
     refresh: bool = False,
     strategy: str = Query("slice", pattern="^(slice|spread)$"),
     verify_search: bool = False,
+    search_pages: int = Query(1, ge=1, le=10),
 ) -> Dict[str, Any]:
     return await live_catalog.audit(
         sample_size=sample_size,
@@ -1497,6 +1558,7 @@ async def catalog_audit(
         refresh=refresh,
         strategy=strategy,
         verify_search=verify_search,
+        search_pages=search_pages,
     )
 
 
@@ -1506,12 +1568,14 @@ async def catalog_readiness(
     query: str = "פוף Matera",
     min_products: int = Query(1000, ge=1),
     refresh: bool = False,
+    search_pages: int = Query(3, ge=1, le=10),
 ) -> Dict[str, Any]:
     return await live_catalog_readiness(
         sample_size=sample_size,
         query=query,
         min_products=min_products,
         refresh=refresh,
+        search_pages=search_pages,
     )
 
 
@@ -1538,6 +1602,35 @@ async def search_products(
             "products": products,
         }
     return products
+
+
+@app.get("/api/products/browse")
+async def browse_products(
+    page: int = Query(1, ge=1, le=5000),
+    limit: int = Query(12, ge=1, le=30),
+    q: str = Query("", alias="q"),
+    include_meta: bool = False,
+) -> Any:
+    products = await live_catalog.browse_sitemap_products(page=page, limit=limit, query=q)
+    public_products = [product.public() for product in products]
+    if include_meta:
+        loaded = await live_catalog.load_sitemap_products()
+        if q:
+            terms = expand_query(q)
+            total = sum(1 for product in loaded if product_matches_terms(product, terms))
+        else:
+            total = len(loaded)
+        return {
+            "source": "live_sitemap",
+            "fallback_used": False,
+            "live_only": True,
+            "page": page,
+            "limit": limit,
+            "count": len(public_products),
+            "total": total,
+            "products": public_products,
+        }
+    return public_products
 
 
 @app.get("/api/products/{sku}")

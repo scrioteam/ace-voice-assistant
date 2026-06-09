@@ -31,9 +31,10 @@ Open:
 - `data/fallback_products.json` keeps the demo reliable offline.
 - `POST /api/demo/refresh-catalog` tries to refresh sofa products from public ACE pages.
 - `GET /api/catalog/status?refresh=true` loads the live ACE sitemap/category sources and reports coverage.
-- `GET /api/catalog/audit?sample_size=5&strategy=spread&verify_search=true&refresh=true` samples live sitemap products across the catalog and verifies they resolve through ACE product pages and assistant search.
-- `GET /api/catalog/readiness?sample_size=3&refresh=true` summarizes whether live ACE access, sampled resolution/search, and live-only search are healthy.
+- `GET /api/catalog/audit?sample_size=5&strategy=spread&verify_search=true&search_pages=3&refresh=true` samples live sitemap products across the catalog and verifies they resolve through ACE product pages and assistant search pages.
+- `GET /api/catalog/readiness?sample_size=3&search_pages=3&refresh=true` summarizes whether live ACE access, sampled resolution/search, and live-only search are healthy.
 - `GET /api/products/search?q=...&live_only=true&include_meta=true` proves a search result came from live ACE access instead of demo fallback data.
+- `GET /api/products/browse?page=1&limit=12&include_meta=true` pages through the live ACE sitemap product index, which is the completeness path when search ranking does not expose a product by title.
 - Live ACE sitemap/search data is kept in memory only and is not written as a local product catalog copy.
 - Product images are cached under `data/image_cache` after first successful fetch.
 

@@ -292,6 +292,26 @@
         });
         return;
       }
+      if (name === "browse_products") {
+        const params = new URLSearchParams();
+        if (args.query) params.set("q", args.query);
+        if (args.limit != null) params.set("limit", args.limit);
+        if (args.page != null) params.set("page", args.page);
+        params.set("include_meta", "true");
+        const data = await fetch("/api/products/browse?" + params.toString()).then((r) => r.json());
+        const products = Array.isArray(data) ? data : (data.products || []);
+        renderProducts(products);
+        sendTool(id, {
+          products,
+          found: products.length,
+          source: data.source || "live_sitemap",
+          fallback_used: Boolean(data.fallback_used),
+          live_only: true,
+          page: data.page || (args.page || 1),
+          total: data.total,
+        });
+        return;
+      }
       if (name === "get_product_details") {
         const response = await fetch("/api/products/" + encodeURIComponent(args.sku) + "?include_meta=true&live_only=true");
         const data = await response.json().catch(() => ({}));

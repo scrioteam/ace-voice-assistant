@@ -100,6 +100,9 @@ def test_realtime_product_tools_are_described_as_live_only():
     assert "לא מוצרי fallback" in tools["search_products"]["description"]
     assert "page" in tools["search_products"]["description"]
     assert "page" in tools["search_products"]["parameters"]["properties"]
+    assert "browse_products" in tools
+    assert "סייטמאפ" in tools["browse_products"]["description"]
+    assert "page" in tools["browse_products"]["parameters"]["properties"]
     assert "ישירות מדף מוצר חי" in tools["get_product_details"]["description"]
     assert "לא משתמש ב-fallback" in tools["get_product_details"]["description"]
     assert "SKU-ים שהתקבלו מתוצאות live" in tools["show_on_screen"]["description"]
@@ -120,6 +123,8 @@ def test_customer_realtime_product_calls_request_live_only_catalog():
     assert 'params.set("live_only", "true")' in js
     assert 'params.set("page", args.page)' in js
     assert "page: data.page" in js
+    assert 'name === "browse_products"' in js
+    assert 'fetch("/api/products/browse?" + params.toString())' in js
     assert '?include_meta=true&live_only=true' in js
     assert "fallback_used" in js
 
@@ -152,6 +157,38 @@ def test_product_search_forwards_page_to_live_catalog(monkeypatch):
     data = response.json()
     assert data["page"] == 2
     assert data["products"][0]["sku"] == "PAGE-2"
+
+
+def test_product_browse_pages_live_sitemap_products(monkeypatch):
+    class FakeLiveCatalog:
+        async def browse_sitemap_products(self, page=1, limit=12, query=""):
+            assert page == 3
+            assert limit == 2
+            assert query == "ספה"
+            return [
+                server.Product(sku="BROWSE-1", title="מוצר סייטמאפ", url="https://www.ace.co.il/BROWSE-1")
+            ]
+
+        async def load_sitemap_products(self):
+            return [
+                server.Product(sku="A", title="ספה אחת", url="https://www.ace.co.il/A"),
+                server.Product(sku="B", title="ארון", url="https://www.ace.co.il/B"),
+            ]
+
+    monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
+    response = client.get(
+        "/api/products/browse",
+        params={"q": "ספה", "page": 3, "limit": 2, "include_meta": "true"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "live_sitemap"
+    assert data["fallback_used"] is False
+    assert data["live_only"] is True
+    assert data["page"] == 3
+    assert data["limit"] == 2
+    assert data["total"] == 1
+    assert data["products"][0]["sku"] == "BROWSE-1"
 
 
 def test_customer_panel_minimize_uses_visible_launcher():
@@ -222,7 +259,7 @@ def test_catalog_readiness_reports_healthy_live_path(monkeypatch):
     class FakeLiveCatalog:
         enabled = True
 
-        async def audit(self, sample_size=3, strategy="spread", refresh=False, verify_search=True, **kwargs):
+        async def audit(self, sample_size=3, strategy="spread", refresh=False, verify_search=True, search_pages=3, **kwargs):
             return {
                 "sitemap_product_count": 33393,
                 "sample_size": sample_size,
@@ -231,6 +268,7 @@ def test_catalog_readiness_reports_healthy_live_path(monkeypatch):
                 "failed_count": 0,
                 "search_matched_count": sample_size,
                 "search_failed_count": 0,
+                "search_pages": search_pages,
             }
 
         async def search(self, q="", category="", min_price=None, max_price=None, limit=12, page=1):
@@ -258,13 +296,14 @@ def test_catalog_readiness_reports_healthy_live_path(monkeypatch):
     assert data["fallback"]["used_for_readiness"] is False
     assert data["live_cache"]["mode"] == "memory_only"
     assert data["live_cache"]["persisted"] is False
+    assert data["audit"]["search_pages"] == 3
 
 
 def test_catalog_readiness_fails_when_samples_are_not_searchable(monkeypatch):
     class FakeLiveCatalog:
         enabled = True
 
-        async def audit(self, sample_size=3, strategy="spread", refresh=False, verify_search=True, **kwargs):
+        async def audit(self, sample_size=3, strategy="spread", refresh=False, verify_search=True, search_pages=3, **kwargs):
             return {
                 "sitemap_product_count": 33393,
                 "sample_size": sample_size,
@@ -273,6 +312,7 @@ def test_catalog_readiness_fails_when_samples_are_not_searchable(monkeypatch):
                 "failed_count": 0,
                 "search_matched_count": 0,
                 "search_failed_count": sample_size,
+                "search_pages": search_pages,
             }
 
         async def search(self, q="", category="", min_price=None, max_price=None, limit=12, page=1):
@@ -824,7 +864,7 @@ def test_parse_sitemap_index_accepts_namespaced_ace_urls():
 
 def test_catalog_audit_resolves_sitemap_products(monkeypatch):
     class FakeLiveCatalog:
-        async def audit(self, sample_size=10, offset=0, refresh=False, strategy="slice", verify_search=False):
+        async def audit(self, sample_size=10, offset=0, refresh=False, strategy="slice", verify_search=False, search_pages=1):
             return {
                 "enabled": True,
                 "sitemap_product_count": 33393,
@@ -835,6 +875,7 @@ def test_catalog_audit_resolves_sitemap_products(monkeypatch):
                 "resolved_count": sample_size,
                 "failed_count": 0,
                 "search_verified": verify_search,
+                "search_pages": search_pages,
                 "search_matched_count": sample_size if verify_search else 0,
                 "search_failed_count": 0,
                 "resolved_products": [{"sku": "5750243", "resolved": True, "product": {"sku": "5750243"}}],
@@ -846,7 +887,14 @@ def test_catalog_audit_resolves_sitemap_products(monkeypatch):
     monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
     response = client.get(
         "/api/catalog/audit",
-        params={"sample_size": 1, "offset": 4, "refresh": "true", "strategy": "spread", "verify_search": "true"},
+        params={
+            "sample_size": 1,
+            "offset": 4,
+            "refresh": "true",
+            "strategy": "spread",
+            "verify_search": "true",
+            "search_pages": 4,
+        },
     )
     assert response.status_code == 200
     data = response.json()
@@ -856,6 +904,7 @@ def test_catalog_audit_resolves_sitemap_products(monkeypatch):
     assert data["offset"] == 4
     assert data["strategy"] == "spread"
     assert data["search_verified"] is True
+    assert data["search_pages"] == 4
     assert data["search_matched_count"] == 1
     assert data["refresh"] is True
 
@@ -870,7 +919,7 @@ def test_catalog_audit_can_verify_sample_is_searchable(monkeypatch):
     async def fake_get(sku):
         return server.Product(sku=sku, title="פוף Matera חי", url=f"https://www.ace.co.il/{sku}")
 
-    async def fake_search(query, category="", min_price=None, max_price=None, limit=12):
+    async def fake_search(query, category="", min_price=None, max_price=None, limit=12, page=1):
         return [server.Product(sku="4440328", title="פוף Matera חי", url="https://www.ace.co.il/4440328")]
 
     monkeypatch.setattr(live, "get", fake_get)
@@ -882,6 +931,35 @@ def test_catalog_audit_can_verify_sample_is_searchable(monkeypatch):
     assert result["search_failed_count"] == 0
     assert result["search_results"][0]["search_query"] == "פוף Matera"
     assert result["search_results"][0]["search_result_skus"] == ["4440328"]
+    assert result["search_results"][0]["search_matched_page"] == 1
+
+
+def test_catalog_audit_can_verify_sample_on_later_search_page(monkeypatch):
+    live = server.AceLiveCatalog()
+    live.sitemap_products = [
+        server.Product(sku="TARGET", title="מוצר מדף", url="https://www.ace.co.il/TARGET")
+    ]
+    live.sitemap_loaded_at = server.now()
+
+    async def fake_get(sku):
+        return server.Product(sku=sku, title="מוצר מדף חי", url=f"https://www.ace.co.il/{sku}")
+
+    async def fake_search(query, category="", min_price=None, max_price=None, limit=12, page=1):
+        if page == 1:
+            return [server.Product(sku="OTHER", title="מוצר אחר", url="https://www.ace.co.il/OTHER")]
+        return [server.Product(sku="TARGET", title="מוצר מדף חי", url="https://www.ace.co.il/TARGET")]
+
+    monkeypatch.setattr(live, "get", fake_get)
+    monkeypatch.setattr(live, "search", fake_search)
+    result = asyncio.run(live.audit(sample_size=1, verify_search=True, search_pages=2))
+    assert result["search_pages"] == 2
+    assert result["search_matched_count"] == 1
+    assert result["search_failed_count"] == 0
+    assert result["search_results"][0]["search_matched_page"] == 2
+    assert result["search_results"][0]["search_result_skus_by_page"] == {
+        "1": ["OTHER"],
+        "2": ["TARGET"],
+    }
 
 
 def test_catalog_audit_matches_alphanumeric_skus_case_insensitively(monkeypatch):
@@ -894,7 +972,7 @@ def test_catalog_audit_matches_alphanumeric_skus_case_insensitively(monkeypatch)
     async def fake_get(sku):
         return server.Product(sku="4498960T", title="מזוודת SwissBrand", url="https://www.ace.co.il/4498960T")
 
-    async def fake_search(query, category="", min_price=None, max_price=None, limit=12):
+    async def fake_search(query, category="", min_price=None, max_price=None, limit=12, page=1):
         return [server.Product(sku="4498960T", title="מזוודת SwissBrand", url="https://www.ace.co.il/4498960T")]
 
     monkeypatch.setattr(live, "get", fake_get)
@@ -1069,6 +1147,22 @@ def test_sitemap_products_for_query_slices_by_page(monkeypatch):
 
     monkeypatch.setattr(live, "enrich_sitemap_products", passthrough)
     products = asyncio.run(live.sitemap_products_for_query("ספה", limit=2, page=2))
+    assert [product.sku for product in products] == ["SKU-3", "SKU-4"]
+
+
+def test_browse_sitemap_products_pages_complete_index(monkeypatch):
+    live = server.AceLiveCatalog()
+    live.sitemap_products = [
+        server.Product(sku=f"SKU-{index}", title=f"מוצר {index}", url=f"https://www.ace.co.il/SKU-{index}")
+        for index in range(1, 6)
+    ]
+    live.sitemap_loaded_at = server.now()
+
+    async def passthrough(products):
+        return products
+
+    monkeypatch.setattr(live, "enrich_sitemap_products", passthrough)
+    products = asyncio.run(live.browse_sitemap_products(page=2, limit=2))
     assert [product.sku for product in products] == ["SKU-3", "SKU-4"]
 
 
