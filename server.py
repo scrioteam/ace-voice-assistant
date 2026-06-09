@@ -1420,10 +1420,15 @@ async def show_on_screen(request: Request) -> Dict[str, Any]:
     body = await request.json()
     session_id = str(body.get("session_id") or "demo-session")
     product_ids = [str(v) for v in body.get("product_ids", [])]
+    live_only = bool(body.get("live_only", False))
+    source_results: List[Dict[str, Any]] = []
     if product_ids:
-        products = [(await get_catalog_product(sku)).public() for sku in product_ids]
+        source_results = [await get_catalog_product_with_source(sku, live_only=live_only) for sku in product_ids]
+        products = [result["product"].public() for result in source_results]
     else:
-        products = [p.public() for p in await search_catalog(body.get("query", "ספה"), limit=3)]
+        result = await search_catalog_with_source(body.get("query", "ספה"), limit=3, live_only=live_only)
+        source_results = [{"source": result["source"], "fallback_used": result["fallback_used"], "product": product} for product in result["products"]]
+        products = [product.public() for product in result["products"]]
     if not products:
         raise HTTPException(status_code=404, detail="No products to show")
     department = body.get("department") or products[0].get("department") or "general"
@@ -1435,7 +1440,16 @@ async def show_on_screen(request: Request) -> Dict[str, Any]:
         mode=str(body.get("mode") or "products"),
         preferred_department=str(department),
     )
-    return {"screen": screen, "products": products}
+    fallback_used = any(result["fallback_used"] for result in source_results)
+    sources = sorted({str(result["source"]) for result in source_results})
+    return {
+        "screen": screen,
+        "products": products,
+        "source": sources[0] if len(sources) == 1 else "mixed",
+        "sources": sources,
+        "fallback_used": fallback_used,
+        "live_only": live_only,
+    }
 
 
 @app.post("/api/demo/reset")

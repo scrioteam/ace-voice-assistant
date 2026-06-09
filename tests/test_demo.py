@@ -529,6 +529,46 @@ def test_show_assigns_only_available_plumbing_screen_by_default():
     assert data["screen"]["id"] == "plumbing"
     assert data["screen"]["status"] == "leased"
     assert data["screen"]["location_label"] == "ליד מחלקת האינסטלציה"
+    assert data["source"] == "fallback"
+    assert data["fallback_used"] is True
+    assert data["live_only"] is False
+
+
+def test_show_can_use_live_only_product_sources(monkeypatch):
+    class FakeLiveCatalog:
+        enabled = True
+
+        async def search(self, q="", category="", min_price=None, max_price=None, limit=12):
+            return []
+
+        async def get(self, sku):
+            return server.Product(sku=sku, title="מוצר חי למסך", url=f"https://www.ace.co.il/{sku}")
+
+    monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
+    response = client.post(
+        "/api/show",
+        json={"session_id": "session-live-screen", "product_ids": ["4440328"], "live_only": True},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "live"
+    assert data["sources"] == ["live"]
+    assert data["fallback_used"] is False
+    assert data["live_only"] is True
+    assert data["products"][0]["sku"] == "4440328"
+
+
+def test_show_live_only_does_not_fallback_to_demo_products():
+    response = client.post(
+        "/api/show",
+        json={"session_id": "session-live-screen", "product_ids": ["601125"], "live_only": True},
+    )
+    assert response.status_code == 404
+
+
+def test_customer_realtime_show_on_screen_requests_live_only():
+    js = (server.STATIC_DIR / "customer.js").read_text(encoding="utf-8")
+    assert "live_only: true" in js
 
 
 def test_screen_availability_and_reset_flow():

@@ -320,6 +320,7 @@
           message: args.message,
           mode: args.mode,
           department: args.department,
+          live_only: true,
         });
         renderProducts(result.products);
         setStatus("מוצג: " + result.screen.location_label, false);
