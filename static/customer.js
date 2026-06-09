@@ -29,6 +29,7 @@
   let recording = false;
   let recordingTimer = null;
   let realtimeFailedOnce = false;
+  const genericVoiceRequestLabel = "בקשה קולית התקבלה בעברית";
 
   function money(value) {
     const amount = Number(value || 0);
@@ -66,14 +67,23 @@
     return foreignMatches.length >= 3 && foreignMatches.length / Math.max(letters.length, 1) > 0.35;
   }
 
+  function canDisplayUserTranscript(text) {
+    const value = String(text || "").trim();
+    if (!value) return false;
+    if (containsHebrewText(value)) return true;
+    if (hasStrongForeignScript(value)) return false;
+    return /^[\d\s.,!?'"()₪%+\-/:A-Za-z]+$/.test(value);
+  }
+
+  function safeUserTranscript(text) {
+    const value = String(text || "").trim();
+    return canDisplayUserTranscript(value) ? value : genericVoiceRequestLabel;
+  }
+
   function addUserTranscript(text) {
     const value = String(text || "").trim();
     if (!value) return;
-    if (!containsHebrewText(value) && hasStrongForeignScript(value)) {
-      addMessage("user", "בקשה קולית התקבלה");
-      return;
-    }
-    addMessage("user", value);
+    addMessage("user", safeUserTranscript(value));
   }
 
   function renderProducts(products) {
@@ -199,6 +209,7 @@
     const value = state === "closed" || state === "minimized" ? state : "open";
     assistantPanel.classList.toggle("is-minimized", value === "minimized");
     assistantPanel.classList.toggle("is-hidden", value === "closed");
+    assistantPanel.setAttribute("aria-expanded", value === "open" ? "true" : "false");
     assistantLauncher.hidden = value !== "closed";
     assistantMinimize.textContent = value === "minimized" ? "פתח" : "מזער";
     assistantMinimize.setAttribute("aria-label", value === "minimized" ? "פתיחת היועץ" : "מזעור היועץ");
@@ -488,7 +499,7 @@
       if (!response.ok) throw new Error(data.detail || response.statusText);
       const text = String(data.text || "").trim();
       if (!text) throw new Error("לא זוהה טקסט ברור");
-      voiceStatus.textContent = "זוהה: " + text;
+      voiceStatus.textContent = "זוהה: " + safeUserTranscript(text);
       await sendDemoText(text, { speak: true });
     } catch (error) {
       voiceStatus.textContent = "זיהוי הקול נכשל: " + (error.message || String(error));
@@ -592,7 +603,7 @@
         }
       }
       const heard = (finalText || interimText).trim();
-      if (heard) voiceStatus.textContent = "שמעתי: " + heard;
+      if (heard) voiceStatus.textContent = "שמעתי: " + safeUserTranscript(heard);
     };
     speechRecognition.onerror = (event) => {
       recognitionError = event.error || "unknown";
@@ -602,7 +613,7 @@
       recognizing = false;
       speechRecognition = null;
       if (value) {
-        voiceStatus.textContent = "שולח ליועץ: " + value;
+        voiceStatus.textContent = "שולח ליועץ: " + safeUserTranscript(value);
         setMicState("speaking");
         sendDemoText(value, { speak: true }).finally(() => {
           if (!connected && !recognizing && !window.speechSynthesis) setMicState("idle");

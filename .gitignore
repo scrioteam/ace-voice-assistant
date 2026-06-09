@@ -3,4 +3,5 @@ data/ace_products.json
 data/image_cache/
 __pycache__/
 .pytest_cache/
+.venv/
 *.pyc

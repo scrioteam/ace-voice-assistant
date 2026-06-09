@@ -56,8 +56,8 @@ button { cursor: pointer; }
 }
 
 .assistant-panel.is-minimized {
-  width: min(330px, calc(100vw - 28px));
-  padding: 12px;
+  width: min(270px, calc(100vw - 28px));
+  padding: 10px 12px;
 }
 
 .assistant-panel.is-minimized .assistant-content {
@@ -65,6 +65,28 @@ button { cursor: pointer; }
 }
 
 .assistant-panel.is-minimized .status-pill {
+  display: none;
+}
+
+.assistant-panel.is-minimized .panel-header {
+  gap: 10px;
+}
+
+.assistant-panel.is-minimized .panel-header h1 {
+  margin-top: 2px;
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.assistant-panel.is-minimized .panel-kicker {
+  font-size: 11px;
+}
+
+.assistant-panel.is-minimized .panel-header-actions {
+  flex: 0 0 auto;
+}
+
+.assistant-panel.is-minimized #assistant-close {
   display: none;
 }
 
@@ -849,6 +871,11 @@ h1, h2, h3, p { margin: 0; }
     inset-inline: 10px;
     bottom: 10px;
     width: auto;
+  }
+
+  .assistant-panel.is-minimized {
+    inset-inline-start: auto;
+    width: min(250px, calc(100vw - 20px));
   }
 }
 
