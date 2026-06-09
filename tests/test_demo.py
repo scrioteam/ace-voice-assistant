@@ -137,6 +137,68 @@ def test_category_urls_are_used_to_extend_live_results(monkeypatch):
     assert [product.sku for product in products] == ["1111111", "3333333"]
 
 
+def test_parse_sitemap_products_from_live_shape():
+    xml = '''
+    <url>
+      <loc>https://www.ace.co.il/4440328</loc>
+      <image:image>
+        <image:loc>https://www.ace.co.il/media/catalog/product/4/4/4440328.jpg</image:loc>
+        <image:title>פוף דגם Matera בגוון אפור בהיר</image:title>
+      </image:image>
+    </url>
+    '''
+    products = server.parse_sitemap_products(xml)
+    assert products[0].sku == "4440328"
+    assert products[0].title == "פוף דגם Matera בגוון אפור בהיר"
+    assert products[0].image_url.endswith("4440328.jpg")
+
+
+def test_sitemap_products_extend_live_search(monkeypatch):
+    live = server.AceLiveCatalog()
+    live.sitemap_products = [
+        server.Product(
+            sku="4440328",
+            title="פוף דגם Matera בגוון אפור בהיר",
+            url="https://www.ace.co.il/4440328",
+            image_url="https://www.ace.co.il/media/4440328.jpg",
+            tags=["פוף", "matera"],
+        )
+    ]
+    live.sitemap_loaded_at = server.now()
+
+    async def no_urls(*args, **kwargs):
+        return []
+
+    async def no_products(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(live, "category_result_urls", no_urls)
+    monkeypatch.setattr(live, "autocomplete_result_urls", no_urls)
+    monkeypatch.setattr(live, "products_from_urls", no_products)
+    products = asyncio.run(live.search("פוף Matera", limit=3))
+    assert [product.sku for product in products] == ["4440328"]
+
+
+def test_live_search_deduplicates_products_from_multiple_sources(monkeypatch):
+    live = server.AceLiveCatalog()
+    live.sitemap_products = [
+        server.Product(sku="4440328", title="פוף Matera", url="https://www.ace.co.il/4440328", tags=["פוף", "matera"])
+    ]
+    live.sitemap_loaded_at = server.now()
+
+    async def no_urls(*args, **kwargs):
+        return []
+
+    async def duplicate_products(*args, **kwargs):
+        return [server.Product(sku="4440328", title="פוף Matera", url="https://www.ace.co.il/4440328")]
+
+    monkeypatch.setattr(live, "category_result_urls", no_urls)
+    monkeypatch.setattr(live, "autocomplete_result_urls", no_urls)
+    monkeypatch.setattr(live, "products_from_urls", duplicate_products)
+    products = asyncio.run(live.search("פוף Matera", limit=3))
+    assert [product.sku for product in products] == ["4440328"]
+
+
 def test_show_assigns_only_available_plumbing_screen_by_default():
     response = client.post(
         "/api/show",

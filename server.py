@@ -26,6 +26,7 @@ IMAGE_CACHE_DIR = DATA_DIR / "image_cache"
 
 ACE_ORIGIN = "https://www.ace.co.il"
 ACE_AUTOCOMPLETE_URL = f"{ACE_ORIGIN}/mageworx_searchsuiteautocomplete/ajax/index/"
+ACE_SITEMAP_URL = f"{ACE_ORIGIN}/sitemap.xml"
 REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
 TRANSCRIPTION_MODEL = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 OPENAI_CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets"
@@ -279,6 +280,8 @@ class AceLiveCatalog:
         self.last_error = ""
         self.category_index: List[Dict[str, str]] = []
         self.category_index_loaded_at = 0.0
+        self.sitemap_products: List[Product] = []
+        self.sitemap_loaded_at = 0.0
 
     async def search(
         self,
@@ -301,7 +304,9 @@ class AceLiveCatalog:
             urls.extend(await self.category_result_urls(query, category))
             urls.extend(await self.autocomplete_result_urls(query))
             products = await self.products_from_urls(urls, query, max(1, min(limit, 30)))
-            filtered = filter_products_by_price(products, min_price, max_price)
+            if len(products) < max(1, min(limit, 30)):
+                products.extend(await self.sitemap_products_for_query(query, max(1, min(limit, 30)) - len(products)))
+            filtered = filter_products_by_price(dedupe_products(products), min_price, max_price)
             return filtered[: max(1, min(limit, 30))]
         except (httpx.HTTPError, ValueError) as exc:
             self.last_error = str(exc)
@@ -386,6 +391,42 @@ class AceLiveCatalog:
                 self.category_index = []
         return self.category_index
 
+    async def sitemap_products_for_query(self, query: str, limit: int) -> List[Product]:
+        terms = expand_query(query)
+        if not terms:
+            return []
+        products = await self.load_sitemap_products()
+        scored: List[tuple[int, Product]] = []
+        for product in products:
+            score = score_product(product, terms)
+            if score > 0:
+                scored.append((score, product))
+        scored.sort(key=lambda item: (-item[0], item[1].title))
+        return [product for _, product in scored[: max(1, min(limit, 30))]]
+
+    async def load_sitemap_products(self) -> List[Product]:
+        if self.sitemap_products and now() - self.sitemap_loaded_at < 6 * 60 * 60:
+            return self.sitemap_products
+        try:
+            index_text = await self.fetch_text(ACE_SITEMAP_URL)
+            sitemap_urls = parse_sitemap_index(index_text)
+            products: List[Product] = []
+            seen: set[str] = set()
+            for sitemap_url in sitemap_urls:
+                sitemap_text = await self.fetch_text(sitemap_url)
+                for product in parse_sitemap_products(sitemap_text):
+                    if product.sku in seen:
+                        continue
+                    seen.add(product.sku)
+                    products.append(product)
+            if products:
+                self.sitemap_products = products
+                self.sitemap_loaded_at = now()
+        except (httpx.HTTPError, ValueError):
+            if not self.sitemap_products:
+                self.sitemap_products = []
+        return self.sitemap_products
+
     async def products_from_urls(self, urls: List[str], query: str, limit: int) -> List[Product]:
         products: List[Product] = []
         seen: set[str] = set()
@@ -418,6 +459,18 @@ def filter_products_by_price(
     return filtered
 
 
+def dedupe_products(products: List[Product]) -> List[Product]:
+    deduped: List[Product] = []
+    seen: set[str] = set()
+    for product in products:
+        key = product.sku or product.url
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(product)
+    return deduped
+
+
 def parse_category_links(html_text: str) -> List[Dict[str, str]]:
     links: List[Dict[str, str]] = []
     seen: set[str] = set()
@@ -432,6 +485,37 @@ def parse_category_links(html_text: str) -> List[Dict[str, str]]:
         seen.add(url)
         links.append({"title": title, "url": url})
     return links
+
+
+def parse_sitemap_index(xml_text: str) -> List[str]:
+    return [
+        absolute_ace_url(url)
+        for url in re.findall(r"<loc>(https://www\.ace\.co\.il/media/sitemap-[^<]+\.xml)</loc>", xml_text or "", flags=re.I)
+    ]
+
+
+def parse_sitemap_products(xml_text: str) -> List[Product]:
+    products: List[Product] = []
+    for block in re.findall(r"<url>(.*?)</url>", xml_text or "", flags=re.I | re.S):
+        loc_match = re.search(r"<loc>(https://www\.ace\.co\.il/(\d{5,10}))</loc>", block, flags=re.I)
+        if not loc_match:
+            continue
+        image_match = re.search(r"<image:loc>(.*?)</image:loc>", block, flags=re.I | re.S)
+        title_match = re.search(r"<image:title>(.*?)</image:title>", block, flags=re.I | re.S)
+        title = strip_html(title_match.group(1)) if title_match else loc_match.group(2)
+        sku = loc_match.group(2)
+        products.append(Product(
+            sku=sku,
+            title=title,
+            url=absolute_ace_url(loc_match.group(1)),
+            image_url=absolute_ace_url(image_match.group(1)) if image_match else "",
+            department=infer_department({"title": title, "url": loc_match.group(1)}),
+            available=True,
+            tags=expand_query(title),
+            sales_notes=["מוצר מאינדקס sitemap חי של ACE.", "למחיר וזמינות סופיים יש לפתוח את דף המוצר החי."],
+            last_seen=now(),
+        ))
+    return products
 
 
 def parse_product_cards(html_text: str, category: str = "") -> List[Product]:
