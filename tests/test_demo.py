@@ -132,6 +132,67 @@ def test_catalog_status_reports_live_catalog(monkeypatch):
     assert data["live_catalog"]["refresh"] is True
 
 
+def test_catalog_readiness_reports_healthy_live_path(monkeypatch):
+    class FakeLiveCatalog:
+        enabled = True
+
+        async def audit(self, sample_size=3, strategy="spread", refresh=False, verify_search=True, **kwargs):
+            return {
+                "sitemap_product_count": 33393,
+                "sample_size": sample_size,
+                "sampled_indexes": [0, 16696, 33392][:sample_size],
+                "resolved_count": sample_size,
+                "failed_count": 0,
+                "search_matched_count": sample_size,
+                "search_failed_count": 0,
+            }
+
+        async def search(self, q="", category="", min_price=None, max_price=None, limit=12):
+            return [server.Product(sku="4440328", title="פוף Matera", url="https://www.ace.co.il/4440328")]
+
+        async def get(self, sku):
+            return None
+
+    monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
+    response = client.get("/api/catalog/readiness", params={"sample_size": 1, "query": "פוף Matera"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ready"] is True
+    assert all(data["checks"].values())
+    assert data["live_only_search"]["source"] == "live"
+    assert data["live_only_search"]["fallback_used"] is False
+    assert data["fallback"]["used_for_readiness"] is False
+
+
+def test_catalog_readiness_fails_when_samples_are_not_searchable(monkeypatch):
+    class FakeLiveCatalog:
+        enabled = True
+
+        async def audit(self, sample_size=3, strategy="spread", refresh=False, verify_search=True, **kwargs):
+            return {
+                "sitemap_product_count": 33393,
+                "sample_size": sample_size,
+                "sampled_indexes": [0],
+                "resolved_count": sample_size,
+                "failed_count": 0,
+                "search_matched_count": 0,
+                "search_failed_count": sample_size,
+            }
+
+        async def search(self, q="", category="", min_price=None, max_price=None, limit=12):
+            return [server.Product(sku="4440328", title="פוף Matera", url="https://www.ace.co.il/4440328")]
+
+        async def get(self, sku):
+            return None
+
+    monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
+    response = client.get("/api/catalog/readiness", params={"sample_size": 1})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ready"] is False
+    assert data["checks"]["sampled_products_searchable"] is False
+
+
 def test_live_catalog_numeric_query_uses_product_details(monkeypatch):
     calls = []
     live = server.AceLiveCatalog()

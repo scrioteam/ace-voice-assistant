@@ -941,6 +941,53 @@ async def get_catalog_product_with_source(sku: str, live_only: bool = False) -> 
     return {"source": "fallback", "fallback_used": True, "product": catalog.get(sku)}
 
 
+async def live_catalog_readiness(
+    sample_size: int = 3,
+    query: str = "פוף Matera",
+    min_products: int = 1000,
+    refresh: bool = False,
+) -> Dict[str, Any]:
+    audit = await live_catalog.audit(
+        sample_size=sample_size,
+        strategy="spread",
+        refresh=refresh,
+        verify_search=True,
+    )
+    search = await search_catalog_with_source(query, limit=3, live_only=True)
+    checks = {
+        "live_catalog_enabled": live_catalog.enabled,
+        "sitemap_loaded": audit["sitemap_product_count"] >= min_products,
+        "sampled_products_resolve": audit["failed_count"] == 0 and audit["resolved_count"] == audit["sample_size"],
+        "sampled_products_searchable": audit["search_failed_count"] == 0 and audit["search_matched_count"] == audit["sample_size"],
+        "live_only_search_uses_live_source": search["source"] == "live" and not search["fallback_used"] and bool(search["products"]),
+    }
+    return {
+        "ready": all(checks.values()),
+        "checks": checks,
+        "query": query,
+        "live_only_search": {
+            "source": search["source"],
+            "fallback_used": search["fallback_used"],
+            "count": len(search["products"]),
+            "skus": [product.sku for product in search["products"]],
+        },
+        "audit": {
+            "sitemap_product_count": audit["sitemap_product_count"],
+            "sample_size": audit["sample_size"],
+            "sampled_indexes": audit["sampled_indexes"],
+            "resolved_count": audit["resolved_count"],
+            "failed_count": audit["failed_count"],
+            "search_matched_count": audit["search_matched_count"],
+            "search_failed_count": audit["search_failed_count"],
+        },
+        "fallback": {
+            "local_fallback_products": len(catalog.products),
+            "local_fallback_source": catalog.loaded_from,
+            "used_for_readiness": False,
+        },
+    }
+
+
 async def scrape_category(url: str) -> List[Product]:
     async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=ACE_HEADERS) as client:
         response = await client.get(url)
@@ -1224,6 +1271,21 @@ async def catalog_audit(
         refresh=refresh,
         strategy=strategy,
         verify_search=verify_search,
+    )
+
+
+@app.get("/api/catalog/readiness")
+async def catalog_readiness(
+    sample_size: int = Query(3, ge=1, le=10),
+    query: str = "פוף Matera",
+    min_products: int = Query(1000, ge=1),
+    refresh: bool = False,
+) -> Dict[str, Any]:
+    return await live_catalog_readiness(
+        sample_size=sample_size,
+        query=query,
+        min_products=min_products,
+        refresh=refresh,
     )
 
 
