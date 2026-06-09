@@ -732,6 +732,24 @@ def paged_url(url: str, page: int) -> str:
     return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
 
 
+def asks_for_more_products(text: str) -> bool:
+    lower = normalize_text(text)
+    return any(
+        term in lower
+        for term in [
+            "עוד",
+            "נוספים",
+            "נוספות",
+            "הבא",
+            "אחרים",
+            "אחרות",
+            "more",
+            "next",
+            "another",
+        ]
+    )
+
+
 def rank_products_for_query(products: List[Product], query: str) -> List[Product]:
     terms = expand_query(query)
     if not terms:
@@ -1338,6 +1356,7 @@ SYSTEM_PROMPT = """
 - כל טקסט שאת מציגה או מתמללת ללקוח חייב להיות בעברית תקנית או מספרים/שמות מוצר כפי שהם באתר. אם תמלול קולי נראה כמו ערבית, רוסית או שפה אחרת בגלל זיהוי שגוי, אל תציגי אותו כפי שהוא; התייחסי אליו כבקשה קולית בעברית ובקשי הבהרה קצרה.
 - כשלקוח מבקש מוצר, שאלי עד שתי שאלות קנייה חסרות: תקציב, מידה, שימוש, צבע, דחיפות או צורך במשלוח.
 - אחרי שיש מספיק מידע, הציגי 2-3 מוצרים אמיתיים מתוצאות live של כלי search_products או get_product_details בלבד. לעולם אל תמציאי מוצר, מחיר, מלאי או קישור.
+- שמרי את החיפוש האחרון: query/category/filters/page. כשהלקוח מבקש "עוד", "אפשרויות נוספות" או "הבא", קראי שוב ל-search_products עם אותם פילטרים ו-page גדול ב-1 במקום להתחיל חיפוש חדש.
 - אם כלי מוצר מחזיר fallback_used=true, source שאינו live, או שגיאה, אל תציגי את המוצר כהמלצה אמיתית; אמרי שלא מצאת תוצאה חיה מספיק טובה ובקשי ניסוח/קטגוריה אחרת.
 - ברירת המחדל היא ייעוץ מכירתי רגוע: הדגישי התאמה לצורך, מבצע, זמינות אונליין ושימושיות בלי לחץ ובלי ניסוחים אגרסיביים.
 - אל תתנדבי לדבר על חסרונות או מחיר גבוה. אם הלקוח מבקש במפורש, מסגרי את זה כהתאמה לצורך: "אם החלל קטן", "אם התקציב הוא השיקול המרכזי", "אם חשוב אירוח"; בלי לתייג מוצר כיקר.
@@ -1351,7 +1370,7 @@ TOOLS = [
     {
         "type": "function",
         "name": "search_products",
-        "description": "חיפוש מוצרים אמיתיים ישירות בקטלוג ACE החי לפי צורך, תקציב וקטגוריה. הכלי מחזיר רק תוצאות live, לא מוצרי fallback של הדמו.",
+        "description": "חיפוש מוצרים אמיתיים ישירות בקטלוג ACE החי לפי צורך, תקציב וקטגוריה. הכלי מחזיר רק תוצאות live, לא מוצרי fallback של הדמו. השתמשי ב-page כדי לדפדף לעמוד הבא של תוצאות ACE כאשר הלקוח מבקש עוד אפשרויות.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1716,13 +1735,47 @@ async def demo_chat(request: Request) -> Dict[str, Any]:
             "products": products,
         }
 
+    if memory.get("stage") == "recommended" and asks_for_more_products(text) and memory.get("catalog_query"):
+        page = normalized_page(int(memory.get("catalog_page") or 1) + 1)
+        query = str(memory.get("catalog_query") or "ספה")
+        max_price = memory.get("max_price")
+        products = [p.public() for p in await search_catalog(query, max_price=max_price, limit=3, page=page)]
+        if not products:
+            return {
+                "message": "לא מצאתי כרגע עוד תוצאות חיות מתאימות באתר ACE לאותו חיפוש. אפשר לשנות תקציב, צבע או שימוש ואחפש כיוון אחר.",
+                "stage": memory["stage"],
+                "products": memory.get("products", []),
+            }
+        best = products[0]
+        screen = screens.show(
+            session_id=session_id,
+            products=products,
+            headline=f"אפשרויות נוספות מעמוד {page} ב-ACE",
+            message=f"הבאתי עוד אפשרויות מאותו חיפוש. הראשונה שהייתי בודק היא {best['title']}.",
+            mode="comparison",
+            preferred_department=best.get("department") or "furniture",
+        )
+        memory["catalog_page"] = page
+        memory["products"] = products
+        return {
+            "message": (
+                f"הבאתי עוד אפשרויות מאתר ACE מאותו חיפוש, מעמוד {page}. "
+                f"האפשרות הראשונה שכדאי לראות היא {best['title']}. עדכנתי את המסך {screen['location_label']}."
+            ),
+            "stage": memory["stage"],
+            "products": products,
+            "screen": screen,
+            "page": page,
+        }
+
     wants_budget = re.search(r"(\d[\d,\.]*)", text)
     wants_bed = any(term in lower for term in ["מיטה", "נפתחת", "אורח", "bed"])
     max_price = parse_price(wants_budget.group(1)) if wants_budget else 4000
     query = "ספה נפתחת מיטה" if wants_bed else "ספה סלון"
-    products = [p.public() for p in await search_catalog(query, max_price=max_price, limit=3)]
+    products = [p.public() for p in await search_catalog(query, max_price=max_price, limit=3, page=1)]
     if not products:
-        products = [p.public() for p in await search_catalog("ספה", limit=3)]
+        query = "ספה"
+        products = [p.public() for p in await search_catalog(query, limit=3, page=1)]
 
     best = products[0]
     screen = screens.show(
@@ -1736,6 +1789,9 @@ async def demo_chat(request: Request) -> Dict[str, Any]:
     location = screen["location_label"]
     memory["stage"] = "recommended"
     memory["products"] = products
+    memory["catalog_query"] = query
+    memory["catalog_page"] = 1
+    memory["max_price"] = max_price
     return {
         "message": (
             f"מצאתי לך התאמה טובה. כדאי לשקול את {best['title']}: היא יושבת טוב על הצורך, "
@@ -1746,6 +1802,7 @@ async def demo_chat(request: Request) -> Dict[str, Any]:
         "stage": memory["stage"],
         "products": products,
         "screen": screen,
+        "page": 1,
     }
 
 

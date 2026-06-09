@@ -98,6 +98,8 @@ def test_realtime_product_tools_are_described_as_live_only():
     tools = {tool["name"]: tool for tool in server.TOOLS}
     assert "ישירות בקטלוג ACE החי" in tools["search_products"]["description"]
     assert "לא מוצרי fallback" in tools["search_products"]["description"]
+    assert "page" in tools["search_products"]["description"]
+    assert "page" in tools["search_products"]["parameters"]["properties"]
     assert "ישירות מדף מוצר חי" in tools["get_product_details"]["description"]
     assert "לא משתמש ב-fallback" in tools["get_product_details"]["description"]
     assert "SKU-ים שהתקבלו מתוצאות live" in tools["show_on_screen"]["description"]
@@ -106,6 +108,7 @@ def test_realtime_product_tools_are_described_as_live_only():
 
 def test_system_prompt_requires_live_catalog_products():
     assert "תוצאות live של כלי search_products או get_product_details בלבד" in server.SYSTEM_PROMPT
+    assert "page גדול ב-1" in server.SYSTEM_PROMPT
     assert "fallback_used=true" in server.SYSTEM_PROMPT
     assert "source שאינו live" in server.SYSTEM_PROMPT
     assert "רק עם SKU-ים שחזרו מתוצאות live" in server.SYSTEM_PROMPT
@@ -116,6 +119,7 @@ def test_customer_realtime_product_calls_request_live_only_catalog():
     assert 'params.set("include_meta", "true")' in js
     assert 'params.set("live_only", "true")' in js
     assert 'params.set("page", args.page)' in js
+    assert "page: data.page" in js
     assert '?include_meta=true&live_only=true' in js
     assert "fallback_used" in js
 
@@ -1172,6 +1176,40 @@ def test_demo_chat_qualifies_then_recommends_and_displays():
     assert comparison.status_code == 200
     assert "התאמה" in comparison.json()["message"]
     assert "יקר" not in comparison.json()["message"]
+
+
+def test_demo_chat_more_options_advances_live_catalog_page(monkeypatch):
+    calls = []
+
+    async def fake_search_catalog(q="", category="", min_price=None, max_price=None, limit=12, page=1):
+        calls.append({"q": q, "max_price": max_price, "limit": limit, "page": page})
+        return [
+            server.Product(
+                sku=f"PAGE-{page}",
+                title=f"ספה מעמוד {page}",
+                url=f"https://www.ace.co.il/PAGE-{page}",
+                price=1000 + page,
+                department="furniture",
+            )
+        ]
+
+    monkeypatch.setattr(server, "search_catalog", fake_search_catalog)
+    first = client.post("/api/demo/chat", json={"session_id": "chat-more", "text": "אני מחפש ספה לסלון"})
+    assert first.status_code == 200
+    second = client.post("/api/demo/chat", json={"session_id": "chat-more", "text": "עד 3000 שקל, נפתחת למיטה"})
+    assert second.status_code == 200
+    assert second.json()["page"] == 1
+
+    more = client.post("/api/demo/chat", json={"session_id": "chat-more", "text": "תראה לי עוד אפשרויות"})
+    assert more.status_code == 200
+    data = more.json()
+    assert data["page"] == 2
+    assert data["products"][0]["sku"] == "PAGE-2"
+    assert "עמוד 2" in data["message"]
+    assert calls == [
+        {"q": "ספה נפתחת מיטה", "max_price": 3000.0, "limit": 3, "page": 1},
+        {"q": "ספה נפתחת מיטה", "max_price": 3000.0, "limit": 3, "page": 2},
+    ]
 
 
 def test_pages_load():

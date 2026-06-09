@@ -288,6 +288,7 @@
           source: data.source || "unknown",
           fallback_used: Boolean(data.fallback_used),
           live_only: true,
+          page: data.page || (args.page || 1),
         });
         return;
       }
