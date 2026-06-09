@@ -448,6 +448,122 @@ def test_parse_sitemap_products_accepts_alphanumeric_product_skus():
     assert products[0].image_url.endswith("4498960t.jpg")
 
 
+def test_parse_sitemap_products_accepts_alphanumeric_skus_without_image_metadata():
+    xml = '''
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url>
+        <loc>https://www.ace.co.il/abc1234</loc>
+      </url>
+    </urlset>
+    '''
+    products = server.parse_sitemap_products(xml)
+    assert [product.sku for product in products] == ["abc1234"]
+    assert products[0].title == "abc1234"
+    assert products[0].image_url == ""
+
+
+def test_parse_sitemap_products_keeps_numeric_no_image_urls_excluded():
+    xml = '''
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url>
+        <loc>https://www.ace.co.il/1234567</loc>
+      </url>
+    </urlset>
+    '''
+    assert server.parse_sitemap_products(xml) == []
+
+
+def test_parse_sitemap_products_regex_fallback_accepts_alphanumeric_without_image_metadata():
+    xml = '''
+    <url>
+      <loc>https://www.ace.co.il/abc1234</loc>
+    </url>
+    '''
+    products = server.parse_sitemap_products(xml)
+    assert [product.sku for product in products] == ["abc1234"]
+
+
+def test_live_sitemap_load_validates_no_image_alphanumeric_candidates(monkeypatch):
+    live = server.AceLiveCatalog()
+
+    async def fake_fetch_text(url):
+        if url == server.ACE_SITEMAP_URL:
+            return '''
+            <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <sitemap><loc>https://www.ace.co.il/media/sitemap-test.xml</loc></sitemap>
+            </sitemapindex>
+            '''
+        return '''
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>https://www.ace.co.il/abc1234</loc></url>
+          <url><loc>https://www.ace.co.il/furniture</loc></url>
+        </urlset>
+        '''
+
+    async def fake_get(sku):
+        if sku == "abc1234":
+            return server.Product(
+                sku="abc1234",
+                title="מוצר חי תקין",
+                url="https://www.ace.co.il/abc1234",
+                price=99,
+            )
+        return server.Product(sku=sku, title=sku, url=f"https://www.ace.co.il/{sku}")
+
+    monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
+    monkeypatch.setattr(live, "get", fake_get)
+    products = asyncio.run(live.load_sitemap_products())
+    assert [product.sku for product in products] == ["abc1234"]
+
+
+def test_live_sitemap_load_prefers_image_backed_duplicate_over_no_image_candidate(monkeypatch):
+    live = server.AceLiveCatalog()
+
+    async def fake_fetch_text(url):
+        if url == server.ACE_SITEMAP_URL:
+            return '''
+            <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <sitemap><loc>https://www.ace.co.il/media/sitemap-test.xml</loc></sitemap>
+            </sitemapindex>
+            '''
+        return '''
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url><loc>https://www.ace.co.il/abc1234</loc></url>
+          <url>
+            <loc>https://www.ace.co.il/abc1234</loc>
+            <image:image xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+              <image:loc>https://www.ace.co.il/media/catalog/product/a/b/abc1234.jpg</image:loc>
+              <image:title>מוצר עם תמונה</image:title>
+            </image:image>
+          </url>
+        </urlset>
+        '''
+
+    async def fake_get(sku):
+        raise AssertionError("image-backed duplicate should not need no-image validation")
+
+    monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
+    monkeypatch.setattr(live, "get", fake_get)
+    products = asyncio.run(live.load_sitemap_products())
+    assert [product.sku for product in products] == ["abc1234"]
+    assert products[0].image_url.endswith("abc1234.jpg")
+
+
+def test_no_image_sitemap_validation_has_short_timeout(monkeypatch):
+    live = server.AceLiveCatalog()
+
+    async def slow_get(sku):
+        await asyncio.sleep(0.05)
+        return server.Product(sku=sku, title="מוצר איטי", url=f"https://www.ace.co.il/{sku}", price=99)
+
+    monkeypatch.setattr(server, "NO_IMAGE_SITEMAP_VALIDATION_SECONDS", 0.001)
+    monkeypatch.setattr(live, "get", slow_get)
+    products = [
+        server.Product(sku="abc1234", title="abc1234", url="https://www.ace.co.il/abc1234"),
+    ]
+    assert asyncio.run(live.validate_no_image_sitemap_products(products)) == []
+
+
 def test_parse_sitemap_index_accepts_namespaced_ace_urls():
     xml = '''
     <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">

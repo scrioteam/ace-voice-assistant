@@ -29,6 +29,7 @@ IMAGE_CACHE_DIR = DATA_DIR / "image_cache"
 ACE_ORIGIN = "https://www.ace.co.il"
 ACE_AUTOCOMPLETE_URL = f"{ACE_ORIGIN}/mageworx_searchsuiteautocomplete/ajax/index/"
 ACE_SITEMAP_URL = f"{ACE_ORIGIN}/sitemap.xml"
+NO_IMAGE_SITEMAP_VALIDATION_SECONDS = 6.0
 REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
 TRANSCRIPTION_MODEL = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 OPENAI_CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets"
@@ -100,6 +101,25 @@ def sku_key(value: Any) -> str:
 
 def is_sku_like(value: Any) -> bool:
     return bool(re.fullmatch(r"[A-Za-z0-9]{5,20}", str(value or "").strip()))
+
+
+def has_alpha(value: Any) -> bool:
+    return bool(re.search(r"[A-Za-z]", str(value or "")))
+
+
+def is_meaningful_product_page(product: Any, requested_sku: Any = "") -> bool:
+    expected = sku_key(requested_sku or product.sku)
+    actual = sku_key(product.sku)
+    if expected and actual != expected:
+        return False
+    title = normalize_text(product.title)
+    sku_title = normalize_text(requested_sku or product.sku)
+    return bool(
+        product.price is not None
+        or product.regular_price is not None
+        or product.specs
+        or (product.image_url and title and title != sku_title)
+    )
 
 
 def parse_price(value: Any) -> Optional[float]:
@@ -445,14 +465,25 @@ class AceLiveCatalog:
                 sitemap_urls = parse_sitemap_index(index_text)
                 products: List[Product] = []
                 seen: set[str] = set()
+                no_image_candidates: Dict[str, Product] = {}
                 for sitemap_url in sitemap_urls:
                     sitemap_text = await self.fetch_text(sitemap_url)
                     for product in parse_sitemap_products(sitemap_text):
                         key = sku_key(product.sku)
                         if key in seen:
                             continue
-                        seen.add(key)
-                        products.append(product)
+                        if product.image_url:
+                            seen.add(key)
+                            no_image_candidates.pop(key, None)
+                            products.append(product)
+                        else:
+                            no_image_candidates.setdefault(key, product)
+                for product in await self.validate_no_image_sitemap_products(list(no_image_candidates.values())):
+                    key = sku_key(product.sku)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    products.append(product)
                 if products:
                     self.sitemap_products = products
                     self.sitemap_loaded_at = now()
@@ -460,6 +491,27 @@ class AceLiveCatalog:
                 if not self.sitemap_products:
                     self.sitemap_products = []
         return self.sitemap_products
+
+    async def validate_no_image_sitemap_products(self, products: List[Product]) -> List[Product]:
+        if not products:
+            return []
+        semaphore = asyncio.Semaphore(12)
+
+        async def validate(product: Product) -> Optional[Product]:
+            async with semaphore:
+                live_product = await self.get(product.sku)
+            if live_product and is_meaningful_product_page(live_product, product.sku):
+                return live_product
+            return None
+
+        try:
+            checked = await asyncio.wait_for(
+                asyncio.gather(*(validate(product) for product in products)),
+                timeout=NO_IMAGE_SITEMAP_VALIDATION_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            checked = []
+        return [product for product in checked if product]
 
     def cache_metadata(self) -> Dict[str, Any]:
         return {
@@ -681,7 +733,9 @@ def parse_sitemap_products(xml_text: str) -> List[Product]:
     products: List[Product] = []
     try:
         root = ET.fromstring(xml_text or "")
-        for node in root.findall(".//{*}url"):
+        nodes = [root] if root.tag.rsplit("}", 1)[-1].lower() == "url" else []
+        nodes.extend(root.findall(".//{*}url"))
+        for node in nodes:
             loc = node.find("{*}loc")
             product = sitemap_node_to_product(loc.text if loc is not None else "", node)
             if product:
@@ -692,14 +746,15 @@ def parse_sitemap_products(xml_text: str) -> List[Product]:
             if not loc_match:
                 continue
             image_match = re.search(r"<image:loc>(.*?)</image:loc>", block, flags=re.I | re.S)
-            if not image_match:
+            sku = loc_match.group(2)
+            if not image_match and not has_alpha(sku):
                 continue
             title_match = re.search(r"<image:title>(.*?)</image:title>", block, flags=re.I | re.S)
             product = sitemap_product(
-                loc_match.group(2),
+                sku,
                 absolute_ace_url(loc_match.group(1)),
-                strip_html(title_match.group(1)) if title_match else loc_match.group(2),
-                absolute_ace_url(image_match.group(1)),
+                strip_html(title_match.group(1)) if title_match else sku,
+                absolute_ace_url(image_match.group(1)) if image_match else "",
             )
             if product:
                 products.append(product)
@@ -722,7 +777,7 @@ def sitemap_node_to_product(loc_text: str, node: ET.Element) -> Optional[Product
             image_url = absolute_ace_url(text)
         elif tag == "title" and text:
             title = strip_html(text)
-    if not image_url:
+    if not image_url and not has_alpha(sku):
         return None
     return sitemap_product(sku, url, title, image_url)
 
