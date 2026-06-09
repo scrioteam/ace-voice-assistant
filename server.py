@@ -1217,6 +1217,34 @@ async def get_catalog_product_with_source(sku: str, live_only: bool = False) -> 
     return {"source": "fallback", "fallback_used": True, "product": catalog.get(sku)}
 
 
+async def verify_catalog_positions(total: int) -> Dict[str, Any]:
+    if total <= 0:
+        return {"checked": [], "resolved_count": 0, "failed_count": 0}
+    positions = sorted({1, max(1, (total + 1) // 2), total})
+    checked = []
+    for position in positions:
+        try:
+            product, actual_position = await live_catalog.sitemap_product_at_position(position)
+            checked.append({
+                "position": actual_position,
+                "resolved": True,
+                "sku": product.sku,
+                "title": product.title,
+            })
+        except Exception as exc:
+            checked.append({
+                "position": position,
+                "resolved": False,
+                "error": str(exc),
+            })
+    failed_count = sum(1 for item in checked if not item["resolved"])
+    return {
+        "checked": checked,
+        "resolved_count": len(checked) - failed_count,
+        "failed_count": failed_count,
+    }
+
+
 async def live_catalog_readiness(
     sample_size: int = 3,
     query: str = "פוף Matera",
@@ -1232,16 +1260,33 @@ async def live_catalog_readiness(
         search_pages=search_pages,
     )
     search = await search_catalog_with_source(query, limit=3, live_only=True)
+    position_access = await verify_catalog_positions(audit["sitemap_product_count"])
     checks = {
         "live_catalog_enabled": live_catalog.enabled,
         "sitemap_loaded": audit["sitemap_product_count"] >= min_products,
         "sampled_products_resolve": audit["failed_count"] == 0 and audit["resolved_count"] == audit["sample_size"],
         "sampled_products_searchable": audit["search_failed_count"] == 0 and audit["search_matched_count"] == audit["sample_size"],
+        "deterministic_catalog_positions_resolve": (
+            position_access["failed_count"] == 0
+            and position_access["resolved_count"] == len(position_access["checked"])
+            and bool(position_access["checked"])
+        ),
         "live_only_search_uses_live_source": search["source"] == "live" and not search["fallback_used"] and bool(search["products"]),
     }
+    complete_access_checks = {
+        key: checks[key]
+        for key in [
+            "live_catalog_enabled",
+            "sitemap_loaded",
+            "sampled_products_resolve",
+            "deterministic_catalog_positions_resolve",
+        ]
+    }
     return {
-        "ready": all(checks.values()),
+        "ready": all(complete_access_checks.values()),
+        "search_ready": checks["sampled_products_searchable"] and checks["live_only_search_uses_live_source"],
         "checks": checks,
+        "complete_access_checks": complete_access_checks,
         "query": query,
         "live_only_search": {
             "source": search["source"],
@@ -1259,6 +1304,7 @@ async def live_catalog_readiness(
             "search_failed_count": audit["search_failed_count"],
             "search_pages": audit["search_pages"],
         },
+        "position_access": position_access,
         "fallback": {
             "local_fallback_products": len(catalog.products),
             "local_fallback_source": catalog.loaded_from,

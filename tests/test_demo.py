@@ -303,6 +303,9 @@ def test_catalog_readiness_reports_healthy_live_path(monkeypatch):
         async def get(self, sku):
             return None
 
+        async def sitemap_product_at_position(self, position):
+            return server.Product(sku=f"POS-{position}", title="מוצר חי", url=f"https://www.ace.co.il/POS-{position}"), position
+
         def cache_metadata(self):
             return {
                 "mode": "memory_only",
@@ -316,7 +319,10 @@ def test_catalog_readiness_reports_healthy_live_path(monkeypatch):
     assert response.status_code == 200
     data = response.json()
     assert data["ready"] is True
+    assert data["search_ready"] is True
     assert all(data["checks"].values())
+    assert data["complete_access_checks"]["deterministic_catalog_positions_resolve"] is True
+    assert data["position_access"]["failed_count"] == 0
     assert data["live_only_search"]["source"] == "live"
     assert data["live_only_search"]["fallback_used"] is False
     assert data["fallback"]["used_for_readiness"] is False
@@ -325,7 +331,7 @@ def test_catalog_readiness_reports_healthy_live_path(monkeypatch):
     assert data["audit"]["search_pages"] == 3
 
 
-def test_catalog_readiness_fails_when_samples_are_not_searchable(monkeypatch):
+def test_catalog_readiness_separates_complete_access_from_searchability(monkeypatch):
     class FakeLiveCatalog:
         enabled = True
 
@@ -347,6 +353,9 @@ def test_catalog_readiness_fails_when_samples_are_not_searchable(monkeypatch):
         async def get(self, sku):
             return None
 
+        async def sitemap_product_at_position(self, position):
+            return server.Product(sku=f"POS-{position}", title="מוצר חי", url=f"https://www.ace.co.il/POS-{position}"), position
+
         def cache_metadata(self):
             return {
                 "mode": "memory_only",
@@ -359,8 +368,44 @@ def test_catalog_readiness_fails_when_samples_are_not_searchable(monkeypatch):
     response = client.get("/api/catalog/readiness", params={"sample_size": 1})
     assert response.status_code == 200
     data = response.json()
-    assert data["ready"] is False
+    assert data["ready"] is True
+    assert data["search_ready"] is False
     assert data["checks"]["sampled_products_searchable"] is False
+    assert data["checks"]["deterministic_catalog_positions_resolve"] is True
+
+
+def test_catalog_readiness_fails_when_position_access_fails(monkeypatch):
+    class FakeLiveCatalog:
+        enabled = True
+
+        async def audit(self, sample_size=3, strategy="spread", refresh=False, verify_search=True, search_pages=3, **kwargs):
+            return {
+                "sitemap_product_count": 33393,
+                "sample_size": sample_size,
+                "sampled_indexes": [0],
+                "resolved_count": sample_size,
+                "failed_count": 0,
+                "search_matched_count": sample_size,
+                "search_failed_count": 0,
+                "search_pages": search_pages,
+            }
+
+        async def search(self, q="", category="", min_price=None, max_price=None, limit=12, page=1):
+            return [server.Product(sku="4440328", title="פוף Matera", url="https://www.ace.co.il/4440328")]
+
+        async def sitemap_product_at_position(self, position):
+            raise RuntimeError("position failed")
+
+        def cache_metadata(self):
+            return {"mode": "memory_only", "persisted": False, "disk_path": None, "source_url": server.ACE_SITEMAP_URL}
+
+    monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
+    response = client.get("/api/catalog/readiness", params={"sample_size": 1})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["ready"] is False
+    assert data["checks"]["deterministic_catalog_positions_resolve"] is False
+    assert data["position_access"]["failed_count"] == 3
 
 
 def test_live_catalog_numeric_query_uses_product_details(monkeypatch):
