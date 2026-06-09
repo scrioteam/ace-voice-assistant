@@ -103,6 +103,9 @@ def test_realtime_product_tools_are_described_as_live_only():
     assert "browse_products" in tools
     assert "סייטמאפ" in tools["browse_products"]["description"]
     assert "page" in tools["browse_products"]["parameters"]["properties"]
+    assert "get_catalog_position" in tools
+    assert "סייטמאפ" in tools["get_catalog_position"]["description"]
+    assert tools["get_catalog_position"]["parameters"]["required"] == ["position"]
     assert "ישירות מדף מוצר חי" in tools["get_product_details"]["description"]
     assert "לא משתמש ב-fallback" in tools["get_product_details"]["description"]
     assert "SKU-ים שהתקבלו מתוצאות live" in tools["show_on_screen"]["description"]
@@ -125,6 +128,8 @@ def test_customer_realtime_product_calls_request_live_only_catalog():
     assert "page: data.page" in js
     assert 'name === "browse_products"' in js
     assert 'fetch("/api/products/browse?" + params.toString())' in js
+    assert 'name === "get_catalog_position"' in js
+    assert '"/api/products/catalog-position/"' in js
     assert '?include_meta=true&live_only=true' in js
     assert "fallback_used" in js
 
@@ -189,6 +194,27 @@ def test_product_browse_pages_live_sitemap_products(monkeypatch):
     assert data["limit"] == 2
     assert data["total"] == 1
     assert data["products"][0]["sku"] == "BROWSE-1"
+
+
+def test_product_catalog_position_returns_live_sitemap_product(monkeypatch):
+    class FakeLiveCatalog:
+        async def sitemap_product_at_position(self, position):
+            assert position == 5
+            return server.Product(sku="POS-5", title="מוצר לפי מיקום", url="https://www.ace.co.il/POS-5"), 5
+
+        async def load_sitemap_products(self):
+            return [server.Product(sku=str(index), title=str(index), url=f"https://www.ace.co.il/{index}") for index in range(10)]
+
+    monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
+    response = client.get("/api/products/catalog-position/5", params={"include_meta": "true"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "live_sitemap"
+    assert data["fallback_used"] is False
+    assert data["live_only"] is True
+    assert data["position"] == 5
+    assert data["total"] == 10
+    assert data["product"]["sku"] == "POS-5"
 
 
 def test_customer_panel_minimize_uses_visible_launcher():
@@ -1164,6 +1190,25 @@ def test_browse_sitemap_products_pages_complete_index(monkeypatch):
     monkeypatch.setattr(live, "enrich_sitemap_products", passthrough)
     products = asyncio.run(live.browse_sitemap_products(page=2, limit=2))
     assert [product.sku for product in products] == ["SKU-3", "SKU-4"]
+
+
+def test_sitemap_product_at_position_enriches_and_clamps(monkeypatch):
+    live = server.AceLiveCatalog()
+    live.sitemap_products = [
+        server.Product(sku="FIRST", title="ראשון", url="https://www.ace.co.il/FIRST"),
+        server.Product(sku="LAST", title="אחרון", url="https://www.ace.co.il/LAST"),
+    ]
+    live.sitemap_loaded_at = server.now()
+
+    async def fake_get(sku):
+        return server.Product(sku=sku, title=f"{sku} חי", url=f"https://www.ace.co.il/{sku}", price=99)
+
+    monkeypatch.setattr(live, "get", fake_get)
+    product, position = asyncio.run(live.sitemap_product_at_position(999))
+    assert position == 2
+    assert product.sku == "LAST"
+    assert product.title == "LAST חי"
+    assert product.price == 99
 
 
 def test_show_assigns_only_available_plumbing_screen_by_default():

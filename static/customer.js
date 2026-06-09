@@ -312,6 +312,34 @@
         });
         return;
       }
+      if (name === "get_catalog_position") {
+        const position = args.position || 1;
+        const response = await fetch("/api/products/catalog-position/" + encodeURIComponent(position) + "?include_meta=true");
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          sendTool(id, {
+            position,
+            found: false,
+            source: "live_sitemap",
+            fallback_used: false,
+            live_only: true,
+            error: data.detail || response.statusText,
+          });
+          return;
+        }
+        const product = data.product || data;
+        renderProducts([product]);
+        sendTool(id, {
+          product,
+          found: true,
+          source: data.source || "live_sitemap",
+          fallback_used: Boolean(data.fallback_used),
+          live_only: true,
+          position: data.position || position,
+          total: data.total,
+        });
+        return;
+      }
       if (name === "get_product_details") {
         const response = await fetch("/api/products/" + encodeURIComponent(args.sku) + "?include_meta=true&live_only=true");
         const data = await response.json().catch(() => ({}));

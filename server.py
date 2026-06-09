@@ -500,6 +500,18 @@ class AceLiveCatalog:
         start = (normalized_page(page) - 1) * result_limit
         return await self.enrich_sitemap_products(products[start : start + result_limit])
 
+    async def sitemap_product_at_position(self, position: int) -> tuple[Product, int]:
+        products = await self.load_sitemap_products()
+        if not products:
+            raise HTTPException(status_code=404, detail="Live ACE sitemap has no products loaded")
+        try:
+            requested = int(position)
+        except (TypeError, ValueError):
+            requested = 1
+        index = max(1, min(requested, len(products))) - 1
+        enriched = await self.enrich_sitemap_products([products[index]])
+        return enriched[0], index + 1
+
     async def enrich_sitemap_products(self, products: List[Product]) -> List[Product]:
         if not products:
             return []
@@ -1403,6 +1415,7 @@ SYSTEM_PROMPT = """
 - אחרי שיש מספיק מידע, הציגי 2-3 מוצרים אמיתיים מתוצאות live של כלי search_products או get_product_details בלבד. לעולם אל תמציאי מוצר, מחיר, מלאי או קישור.
 - שמרי את החיפוש האחרון: query/category/filters/page. כשהלקוח מבקש "עוד", "אפשרויות נוספות" או "הבא", קראי שוב ל-search_products עם אותם פילטרים ו-page גדול ב-1 במקום להתחיל חיפוש חדש.
 - אם חיפוש לפי טקסט לא מספיק או צריך להראות רוחב קטלוג, השתמשי ב-browse_products כדי לדפדף באינדקס המוצרים החי של ACE לפי עמודים. גם כאן הציגי רק מוצרים שחזרו מהכלי.
+- כאשר צריך להוכיח גישה למוצר מסוים באינדקס הרחב, אפשר להשתמש ב-get_catalog_position עם מספר מיקום מהסייטמאפ החי של ACE.
 - אם כלי מוצר מחזיר fallback_used=true, source שאינו live, או שגיאה, אל תציגי את המוצר כהמלצה אמיתית; אמרי שלא מצאת תוצאה חיה מספיק טובה ובקשי ניסוח/קטגוריה אחרת.
 - ברירת המחדל היא ייעוץ מכירתי רגוע: הדגישי התאמה לצורך, מבצע, זמינות אונליין ושימושיות בלי לחץ ובלי ניסוחים אגרסיביים.
 - אל תתנדבי לדבר על חסרונות או מחיר גבוה. אם הלקוח מבקש במפורש, מסגרי את זה כהתאמה לצורך: "אם החלל קטן", "אם התקציב הוא השיקול המרכזי", "אם חשוב אירוח"; בלי לתייג מוצר כיקר.
@@ -1442,6 +1455,18 @@ TOOLS = [
                 "query": {"type": "string", "description": "אופציונלי: סינון/דירוג לפי צורך או קטגוריה"},
             },
             "required": [],
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_catalog_position",
+        "description": "קבלת מוצר לפי מספר מיקום באינדקס הסייטמאפ החי של ACE. זה מאפשר גישה דטרמיניסטית לכל מוצר שפורסם בסייטמאפ, בלי להעתיק קטלוג מקומי ובלי fallback.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "position": {"type": "integer", "description": "מיקום 1-based באינדקס מוצרי הסייטמאפ החי"},
+            },
+            "required": ["position"],
         },
     },
     {
@@ -1631,6 +1656,23 @@ async def browse_products(
             "products": public_products,
         }
     return public_products
+
+
+@app.get("/api/products/catalog-position/{position}")
+async def product_by_catalog_position(position: int, include_meta: bool = False) -> Dict[str, Any]:
+    product, actual_position = await live_catalog.sitemap_product_at_position(position)
+    loaded = await live_catalog.load_sitemap_products()
+    payload = {
+        "source": "live_sitemap",
+        "fallback_used": False,
+        "live_only": True,
+        "position": actual_position,
+        "total": len(loaded),
+        "product": product.public(),
+    }
+    if include_meta:
+        return payload
+    return payload["product"]
 
 
 @app.get("/api/products/{sku}")
