@@ -116,7 +116,7 @@ def test_autocomplete_urls_are_used_to_extend_live_results(monkeypatch):
     monkeypatch.setattr(live, "autocomplete_result_urls", fake_autocomplete)
     monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
     products = asyncio.run(live.search("בדיקה", limit=2))
-    assert [product.sku for product in products] == ["1111111", "2222222"]
+    assert {product.sku for product in products} == {"1111111", "2222222"}
 
 
 def test_parse_category_links_from_ace_menu_html():
@@ -156,7 +156,7 @@ def test_category_urls_are_used_to_extend_live_results(monkeypatch):
     monkeypatch.setattr(live, "autocomplete_result_urls", fake_autocomplete)
     monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
     products = asyncio.run(live.search("כלי עבודה", limit=2))
-    assert [product.sku for product in products] == ["1111111", "3333333"]
+    assert {product.sku for product in products} == {"1111111", "3333333"}
 
 
 def test_parse_sitemap_products_from_live_shape():
@@ -235,6 +235,30 @@ def test_live_search_deduplicates_products_from_multiple_sources(monkeypatch):
     monkeypatch.setattr(live, "get", fake_get)
     products = asyncio.run(live.search("פוף Matera", limit=3))
     assert [product.sku for product in products] == ["4440328"]
+
+
+def test_sitemap_exact_match_can_outrank_page_results(monkeypatch):
+    live = server.AceLiveCatalog()
+    live.sitemap_products = [
+        server.Product(sku="4440328", title="פוף Matera", url="https://www.ace.co.il/4440328", tags=["פוף", "matera"])
+    ]
+    live.sitemap_loaded_at = server.now()
+
+    async def no_urls(*args, **kwargs):
+        return []
+
+    async def broad_page_products(*args, **kwargs):
+        return [server.Product(sku="1111111", title="מוצר כללי", url="https://www.ace.co.il/1111111", price=10)]
+
+    async def fake_get(sku):
+        return server.Product(sku=sku, title="פוף Matera חי", url=f"https://www.ace.co.il/{sku}", price=129)
+
+    monkeypatch.setattr(live, "category_result_urls", no_urls)
+    monkeypatch.setattr(live, "autocomplete_result_urls", no_urls)
+    monkeypatch.setattr(live, "products_from_urls", broad_page_products)
+    monkeypatch.setattr(live, "get", fake_get)
+    products = asyncio.run(live.search("פוף Matera", limit=2))
+    assert [product.sku for product in products] == ["4440328", "1111111"]
 
 
 def test_show_assigns_only_available_plumbing_screen_by_default():

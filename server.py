@@ -305,10 +305,9 @@ class AceLiveCatalog:
             urls.extend(await self.category_result_urls(query, category))
             urls.extend(await self.autocomplete_result_urls(query))
             products = await self.products_from_urls(urls, query, max(1, min(limit, 30)))
-            if len(products) < max(1, min(limit, 30)):
-                products.extend(await self.sitemap_products_for_query(query, max(1, min(limit, 30)) - len(products)))
+            products.extend(await self.sitemap_products_for_query(query, max(1, min(limit, 30))))
             filtered = filter_products_by_price(dedupe_products(products), min_price, max_price)
-            return filtered[: max(1, min(limit, 30))]
+            return rank_products_for_query(filtered, query)[: max(1, min(limit, 30))]
         except (httpx.HTTPError, ValueError) as exc:
             self.last_error = str(exc)
             return []
@@ -505,6 +504,18 @@ def dedupe_products(products: List[Product]) -> List[Product]:
         seen.add(key)
         deduped.append(product)
     return deduped
+
+
+def rank_products_for_query(products: List[Product], query: str) -> List[Product]:
+    terms = expand_query(query)
+    if not terms:
+        return products
+    return [
+        product for _, product in sorted(
+            ((score_product(product, terms), product) for product in products),
+            key=lambda item: (-item[0], item[1].price if item[1].price is not None else 10**9, item[1].title),
+        )
+    ]
 
 
 def parse_category_links(html_text: str) -> List[Dict[str, str]]:
@@ -1273,7 +1284,8 @@ def realtime_session_config() -> Dict[str, Any]:
             "input": {
                 "transcription": {
                     "model": "gpt-realtime-whisper",
-                    "prompt": "עברית ישראלית בלבד. תמלל דיבור של לקוחות בחנות ACE בעברית, כולל שמות מוצרים, מחירים ומספרים.",
+                    "language": "he",
+                    "delay": "medium",
                 },
             },
         },

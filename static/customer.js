@@ -171,11 +171,15 @@
     window.speechSynthesis.speak(utterance);
   }
 
+  function displayTextForInput(text, options) {
+    return options && options.voice ? safeUserTranscript(text) : String(text || "").trim();
+  }
+
   async function sendDemoText(text, options) {
     const value = String(text || "").trim();
     if (!value) return;
     const shouldSpeak = Boolean(options && options.speak);
-    addMessage("user", value);
+    addMessage("user", displayTextForInput(value, options));
     chatInput.value = "";
     setStatus("מעבד בקשה", true);
     try {
@@ -215,6 +219,12 @@
     assistantMinimize.setAttribute("aria-label", value === "minimized" ? "פתיחת היועץ" : "מזעור היועץ");
     localStorage.setItem("ace_assistant_panel_state", value);
   }
+
+  assistantPanel.querySelector(".panel-header").addEventListener("click", (event) => {
+    if (!assistantPanel.classList.contains("is-minimized")) return;
+    if (event.target.closest("button")) return;
+    setAssistantPanelState("open");
+  });
 
   assistantMinimize.addEventListener("click", () => {
     const next = assistantPanel.classList.contains("is-minimized") ? "open" : "minimized";
@@ -500,7 +510,7 @@
       const text = String(data.text || "").trim();
       if (!text) throw new Error("לא זוהה טקסט ברור");
       voiceStatus.textContent = "זוהה: " + safeUserTranscript(text);
-      await sendDemoText(text, { speak: true });
+      await sendDemoText(text, { speak: true, voice: true });
     } catch (error) {
       voiceStatus.textContent = "זיהוי הקול נכשל: " + (error.message || String(error));
       setMicState("idle");
@@ -615,7 +625,7 @@
       if (value) {
         voiceStatus.textContent = "שולח ליועץ: " + safeUserTranscript(value);
         setMicState("speaking");
-        sendDemoText(value, { speak: true }).finally(() => {
+        sendDemoText(value, { speak: true, voice: true }).finally(() => {
           if (!connected && !recognizing && !window.speechSynthesis) setMicState("idle");
         });
         return;
