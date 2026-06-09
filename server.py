@@ -98,6 +98,10 @@ def sku_key(value: Any) -> str:
     return normalize_text(value).replace(" ", "")
 
 
+def is_sku_like(value: Any) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9]{5,20}", str(value or "").strip()))
+
+
 def parse_price(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -305,9 +309,10 @@ class AceLiveCatalog:
         if not query:
             return []
         try:
-            if re.fullmatch(r"\d{5,10}", query):
+            if is_sku_like(query):
                 product = await self.get(query)
-                return [product] if product else []
+                if product:
+                    return [product]
             urls = [f"{ACE_ORIGIN}/catalogsearch/result/?q={urllib.parse.quote(query)}"]
             urls.extend(await self.category_result_urls(query, category))
             urls.extend(await self.autocomplete_result_urls(query))

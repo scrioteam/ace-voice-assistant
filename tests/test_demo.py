@@ -278,6 +278,59 @@ def test_live_catalog_numeric_query_uses_product_details(monkeypatch):
     assert products[0].sku == "4498444"
 
 
+def test_live_catalog_alphanumeric_query_uses_product_details(monkeypatch):
+    calls = []
+    live = server.AceLiveCatalog()
+
+    async def fake_get(sku):
+        calls.append(sku)
+        return server.Product(
+            sku="4498960T",
+            title="מוצר לפי מקט אלפאנומרי",
+            url=f"https://www.ace.co.il/{sku}",
+            price=42,
+        )
+
+    monkeypatch.setattr(live, "get", fake_get)
+    products = asyncio.run(live.search("4498960t"))
+    assert calls == ["4498960t"]
+    assert products[0].sku == "4498960T"
+
+
+def test_sku_like_live_search_miss_falls_back_to_regular_search(monkeypatch):
+    live = server.AceLiveCatalog()
+    calls = []
+
+    async def fake_get(sku):
+        calls.append(("get", sku))
+        return None
+
+    async def no_urls(*args, **kwargs):
+        return []
+
+    async def page_products(urls, query, limit):
+        calls.append(("products_from_urls", query))
+        return [
+            server.Product(
+                sku="1111111",
+                title="תוצאה מחיפוש רגיל",
+                url="https://www.ace.co.il/1111111",
+            )
+        ]
+
+    async def no_sitemap_products(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(live, "get", fake_get)
+    monkeypatch.setattr(live, "category_result_urls", no_urls)
+    monkeypatch.setattr(live, "autocomplete_result_urls", no_urls)
+    monkeypatch.setattr(live, "products_from_urls", page_products)
+    monkeypatch.setattr(live, "sitemap_products_for_query", no_sitemap_products)
+    products = asyncio.run(live.search("abc123"))
+    assert calls == [("get", "abc123"), ("products_from_urls", "abc123")]
+    assert [product.sku for product in products] == ["1111111"]
+
+
 def test_autocomplete_urls_are_used_to_extend_live_results(monkeypatch):
     live = server.AceLiveCatalog()
 
