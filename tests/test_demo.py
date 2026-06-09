@@ -175,6 +175,62 @@ def test_parse_sitemap_products_from_live_shape():
     assert products[0].image_url.endswith("4440328.jpg")
 
 
+def test_parse_sitemap_products_excludes_numeric_category_urls():
+    xml = '''
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url><loc>https://www.ace.co.il/perfumes-pharm/114030000</loc></url>
+      <url>
+        <loc>https://www.ace.co.il/4440328</loc>
+        <image:image xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+          <image:loc>https://www.ace.co.il/media/catalog/product/4/4/4440328.jpg</image:loc>
+          <image:title>פוף דגם Matera בגוון אפור בהיר</image:title>
+        </image:image>
+      </url>
+    </urlset>
+    '''
+    products = server.parse_sitemap_products(xml)
+    assert [product.sku for product in products] == ["4440328"]
+
+
+def test_parse_sitemap_index_accepts_namespaced_ace_urls():
+    xml = '''
+    <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <sitemap><loc>https://www.ace.co.il/media/sitemap-5-1.xml</loc></sitemap>
+      <sitemap><loc>https://www.ace.co.il/media/sitemap-5-2.xml</loc></sitemap>
+    </sitemapindex>
+    '''
+    assert server.parse_sitemap_index(xml) == [
+        "https://www.ace.co.il/media/sitemap-5-1.xml",
+        "https://www.ace.co.il/media/sitemap-5-2.xml",
+    ]
+
+
+def test_catalog_audit_resolves_sitemap_products(monkeypatch):
+    class FakeLiveCatalog:
+        async def audit(self, sample_size=10, offset=0, refresh=False):
+            return {
+                "enabled": True,
+                "sitemap_product_count": 33393,
+                "sample_size": sample_size,
+                "offset": offset,
+                "resolved_count": sample_size,
+                "failed_count": 0,
+                "resolved_products": [{"sku": "5750243", "resolved": True, "product": {"sku": "5750243"}}],
+                "failed_products": [],
+                "refresh": refresh,
+            }
+
+    monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
+    response = client.get("/api/catalog/audit", params={"sample_size": 1, "offset": 4, "refresh": "true"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["sitemap_product_count"] == 33393
+    assert data["resolved_count"] == 1
+    assert data["failed_count"] == 0
+    assert data["offset"] == 4
+    assert data["refresh"] is True
+
+
 def test_sitemap_products_extend_live_search(monkeypatch):
     live = server.AceLiveCatalog()
     live.sitemap_products = [

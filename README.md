@@ -30,6 +30,8 @@ Open:
 
 - `data/fallback_products.json` keeps the demo reliable offline.
 - `POST /api/demo/refresh-catalog` tries to refresh sofa products from public ACE pages.
+- `GET /api/catalog/status?refresh=true` loads the live ACE sitemap/category sources and reports coverage.
+- `GET /api/catalog/audit?sample_size=5&refresh=true` samples live sitemap products and verifies they resolve through ACE product pages.
 - Product images are cached under `data/image_cache` after first successful fetch.
 
 ## Tests

@@ -6,6 +6,7 @@ import re
 import socket
 import time
 import urllib.parse
+import xml.etree.ElementTree as ET
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -462,6 +463,50 @@ class AceLiveCatalog:
             "sample_products": [product.public() for product in sample],
         }
 
+    async def audit(self, sample_size: int = 10, offset: int = 0, refresh: bool = False) -> Dict[str, Any]:
+        if refresh:
+            self.sitemap_loaded_at = 0.0
+        products = await self.load_sitemap_products()
+        if not products:
+            return {
+                "enabled": self.enabled,
+                "sitemap_product_count": 0,
+                "sample_size": 0,
+                "offset": 0,
+                "resolved_count": 0,
+                "failed_count": 0,
+                "resolved_products": [],
+                "failed_products": [],
+            }
+        size = max(1, min(sample_size, 25))
+        start = max(0, min(offset, len(products) - 1))
+        sample = products[start:start + size]
+        if len(sample) < size and start:
+            sample.extend(products[: size - len(sample)])
+
+        async def resolve(product: Product) -> Dict[str, Any]:
+            live_product = await self.get(product.sku)
+            return {
+                "sku": product.sku,
+                "sitemap_title": product.title,
+                "resolved": bool(live_product),
+                "product": live_product.public() if live_product else None,
+            }
+
+        checked = await asyncio.gather(*(resolve(product) for product in sample))
+        resolved = [item for item in checked if item["resolved"]]
+        failed = [item for item in checked if not item["resolved"]]
+        return {
+            "enabled": self.enabled,
+            "sitemap_product_count": len(products),
+            "sample_size": len(sample),
+            "offset": start,
+            "resolved_count": len(resolved),
+            "failed_count": len(failed),
+            "resolved_products": resolved,
+            "failed_products": failed,
+        }
+
     async def products_from_urls(self, urls: List[str], query: str, limit: int) -> List[Product]:
         products: List[Product] = []
         seen: set[str] = set()
@@ -535,34 +580,79 @@ def parse_category_links(html_text: str) -> List[Dict[str, str]]:
 
 
 def parse_sitemap_index(xml_text: str) -> List[str]:
-    return [
-        absolute_ace_url(url)
-        for url in re.findall(r"<loc>(https://www\.ace\.co\.il/media/sitemap-[^<]+\.xml)</loc>", xml_text or "", flags=re.I)
-    ]
+    urls: List[str] = []
+    try:
+        root = ET.fromstring(xml_text or "")
+        for loc in root.findall(".//{*}sitemap/{*}loc"):
+            url = absolute_ace_url(loc.text or "")
+            if url.startswith(f"{ACE_ORIGIN}/") and url.endswith(".xml") and url not in urls:
+                urls.append(url)
+    except ET.ParseError:
+        for url in re.findall(r"<loc>(https://www\.ace\.co\.il/[^<]+\.xml)</loc>", xml_text or "", flags=re.I):
+            resolved = absolute_ace_url(url)
+            if resolved not in urls:
+                urls.append(resolved)
+    return urls
 
 
 def parse_sitemap_products(xml_text: str) -> List[Product]:
     products: List[Product] = []
-    for block in re.findall(r"<url>(.*?)</url>", xml_text or "", flags=re.I | re.S):
-        loc_match = re.search(r"<loc>(https://www\.ace\.co\.il/(\d{5,10}))</loc>", block, flags=re.I)
-        if not loc_match:
-            continue
-        image_match = re.search(r"<image:loc>(.*?)</image:loc>", block, flags=re.I | re.S)
-        title_match = re.search(r"<image:title>(.*?)</image:title>", block, flags=re.I | re.S)
-        title = strip_html(title_match.group(1)) if title_match else loc_match.group(2)
-        sku = loc_match.group(2)
-        products.append(Product(
-            sku=sku,
-            title=title,
-            url=absolute_ace_url(loc_match.group(1)),
-            image_url=absolute_ace_url(image_match.group(1)) if image_match else "",
-            department=infer_department({"title": title, "url": loc_match.group(1)}),
-            available=True,
-            tags=expand_query(title),
-            sales_notes=["מוצר מאינדקס sitemap חי של ACE.", "למחיר וזמינות סופיים יש לפתוח את דף המוצר החי."],
-            last_seen=now(),
-        ))
+    try:
+        root = ET.fromstring(xml_text or "")
+        for node in root.findall(".//{*}url"):
+            loc = node.find("{*}loc")
+            product = sitemap_node_to_product(loc.text if loc is not None else "", node)
+            if product:
+                products.append(product)
+    except ET.ParseError:
+        for block in re.findall(r"<url>(.*?)</url>", xml_text or "", flags=re.I | re.S):
+            loc_match = re.search(r"<loc>(https://www\.ace\.co\.il/(\d{5,10}))</loc>", block, flags=re.I)
+            if not loc_match:
+                continue
+            image_match = re.search(r"<image:loc>(.*?)</image:loc>", block, flags=re.I | re.S)
+            title_match = re.search(r"<image:title>(.*?)</image:title>", block, flags=re.I | re.S)
+            product = sitemap_product(
+                loc_match.group(2),
+                absolute_ace_url(loc_match.group(1)),
+                strip_html(title_match.group(1)) if title_match else loc_match.group(2),
+                absolute_ace_url(image_match.group(1)) if image_match else "",
+            )
+            if product:
+                products.append(product)
     return products
+
+
+def sitemap_node_to_product(loc_text: str, node: ET.Element) -> Optional[Product]:
+    url = absolute_ace_url(loc_text or "")
+    sku = url.rstrip("/").split("/")[-1]
+    if not re.fullmatch(r"\d{5,10}", sku or ""):
+        return None
+    if urllib.parse.urlparse(url).path.strip("/") != sku:
+        return None
+    image_url = ""
+    title = sku
+    for child in node.iter():
+        tag = child.tag.rsplit("}", 1)[-1].lower()
+        text = str(child.text or "").strip()
+        if tag == "loc" and child is not node.find("{*}loc") and text:
+            image_url = absolute_ace_url(text)
+        elif tag == "title" and text:
+            title = strip_html(text)
+    return sitemap_product(sku, url, title, image_url)
+
+
+def sitemap_product(sku: str, url: str, title: str, image_url: str = "") -> Product:
+    return Product(
+        sku=sku,
+        title=title or sku,
+        url=url,
+        image_url=image_url,
+        department=infer_department({"title": title, "url": url}),
+        available=True,
+        tags=expand_query(title),
+        sales_notes=["מוצר מאינדקס sitemap חי של ACE.", "למחיר וזמינות סופיים יש לפתוח את דף המוצר החי."],
+        last_seen=now(),
+    )
 
 
 def parse_product_cards(html_text: str, category: str = "") -> List[Product]:
@@ -1040,6 +1130,15 @@ async def catalog_status(refresh: bool = False) -> Dict[str, Any]:
         "local_fallback_source": catalog.loaded_from,
         "live_catalog": status,
     }
+
+
+@app.get("/api/catalog/audit")
+async def catalog_audit(
+    sample_size: int = Query(10, ge=1, le=25),
+    offset: int = Query(0, ge=0),
+    refresh: bool = False,
+) -> Dict[str, Any]:
+    return await live_catalog.audit(sample_size=sample_size, offset=offset, refresh=refresh)
 
 
 @app.get("/api/products/search")
