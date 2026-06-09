@@ -270,6 +270,7 @@
         if (args.max_price != null) params.set("max_price", args.max_price);
         if (args.limit != null) params.set("limit", args.limit);
         params.set("include_meta", "true");
+        params.set("live_only", "true");
         const data = await fetch("/api/products/search?" + params.toString()).then((r) => r.json());
         const products = Array.isArray(data) ? data : (data.products || []);
         renderProducts(products);
@@ -278,17 +279,31 @@
           found: products.length,
           source: data.source || "unknown",
           fallback_used: Boolean(data.fallback_used),
+          live_only: true,
         });
         return;
       }
       if (name === "get_product_details") {
-        const data = await fetch("/api/products/" + encodeURIComponent(args.sku) + "?include_meta=true").then((r) => r.json());
+        const response = await fetch("/api/products/" + encodeURIComponent(args.sku) + "?include_meta=true&live_only=true");
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          sendTool(id, {
+            sku: args.sku,
+            found: false,
+            source: "live",
+            fallback_used: false,
+            live_only: true,
+            error: data.detail || response.statusText,
+          });
+          return;
+        }
         const product = data.product || data;
         renderProducts([product]);
         sendTool(id, {
           ...product,
           source: data.source || "unknown",
           fallback_used: Boolean(data.fallback_used),
+          live_only: true,
         });
         return;
       }

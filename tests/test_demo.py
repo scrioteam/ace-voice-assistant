@@ -94,6 +94,22 @@ def test_live_only_product_details_does_not_fallback_to_demo_catalog():
     assert response.status_code == 404
 
 
+def test_realtime_product_tools_are_described_as_live_only():
+    tools = {tool["name"]: tool for tool in server.TOOLS}
+    assert "ישירות בקטלוג ACE החי" in tools["search_products"]["description"]
+    assert "לא מוצרי fallback" in tools["search_products"]["description"]
+    assert "ישירות מדף מוצר חי" in tools["get_product_details"]["description"]
+    assert "לא משתמש ב-fallback" in tools["get_product_details"]["description"]
+
+
+def test_customer_realtime_product_calls_request_live_only_catalog():
+    js = (server.STATIC_DIR / "customer.js").read_text(encoding="utf-8")
+    assert 'params.set("include_meta", "true")' in js
+    assert 'params.set("live_only", "true")' in js
+    assert '?include_meta=true&live_only=true' in js
+    assert "fallback_used" in js
+
+
 def test_catalog_status_reports_live_catalog(monkeypatch):
     class FakeLiveCatalog:
         async def status(self, refresh=False):

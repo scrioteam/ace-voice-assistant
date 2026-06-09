@@ -1098,7 +1098,7 @@ TOOLS = [
     {
         "type": "function",
         "name": "search_products",
-        "description": "חיפוש מוצרים אמיתיים בקטלוג ACE לפי צורך, תקציב וקטגוריה.",
+        "description": "חיפוש מוצרים אמיתיים ישירות בקטלוג ACE החי לפי צורך, תקציב וקטגוריה. הכלי מחזיר רק תוצאות live, לא מוצרי fallback של הדמו.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -1114,7 +1114,7 @@ TOOLS = [
     {
         "type": "function",
         "name": "get_product_details",
-        "description": "קבלת פרטי מוצר לפי SKU.",
+        "description": "קבלת פרטי מוצר ישירות מדף מוצר חי באתר ACE לפי SKU. אם אין מוצר חי, הכלי מחזיר שגיאה ולא משתמש ב-fallback.",
         "parameters": {
             "type": "object",
             "properties": {"sku": {"type": "string"}},
