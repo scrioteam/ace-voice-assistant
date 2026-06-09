@@ -463,7 +463,13 @@ class AceLiveCatalog:
             "sample_products": [product.public() for product in sample],
         }
 
-    async def audit(self, sample_size: int = 10, offset: int = 0, refresh: bool = False) -> Dict[str, Any]:
+    async def audit(
+        self,
+        sample_size: int = 10,
+        offset: int = 0,
+        refresh: bool = False,
+        strategy: str = "slice",
+    ) -> Dict[str, Any]:
         if refresh:
             self.sitemap_loaded_at = 0.0
         products = await self.load_sitemap_products()
@@ -473,6 +479,8 @@ class AceLiveCatalog:
                 "sitemap_product_count": 0,
                 "sample_size": 0,
                 "offset": 0,
+                "strategy": normalize_audit_strategy(strategy),
+                "sampled_indexes": [],
                 "resolved_count": 0,
                 "failed_count": 0,
                 "resolved_products": [],
@@ -480,9 +488,9 @@ class AceLiveCatalog:
             }
         size = max(1, min(sample_size, 25))
         start = max(0, min(offset, len(products) - 1))
-        sample = products[start:start + size]
-        if len(sample) < size and start:
-            sample.extend(products[: size - len(sample)])
+        strategy_value = normalize_audit_strategy(strategy)
+        indexes = catalog_audit_indexes(len(products), size, start, strategy_value)
+        sample = [products[index] for index in indexes]
 
         async def resolve(product: Product) -> Dict[str, Any]:
             live_product = await self.get(product.sku)
@@ -501,6 +509,8 @@ class AceLiveCatalog:
             "sitemap_product_count": len(products),
             "sample_size": len(sample),
             "offset": start,
+            "strategy": strategy_value,
+            "sampled_indexes": indexes,
             "resolved_count": len(resolved),
             "failed_count": len(failed),
             "resolved_products": resolved,
@@ -561,6 +571,23 @@ def rank_products_for_query(products: List[Product], query: str) -> List[Product
             key=lambda item: (-item[0], item[1].price if item[1].price is not None else 10**9, item[1].title),
         )
     ]
+
+
+def normalize_audit_strategy(strategy: str) -> str:
+    return "spread" if normalize_text(strategy) == "spread" else "slice"
+
+
+def catalog_audit_indexes(product_count: int, sample_size: int, offset: int = 0, strategy: str = "slice") -> List[int]:
+    if product_count <= 0:
+        return []
+    size = max(1, min(sample_size, product_count))
+    start = max(0, min(offset, product_count - 1))
+    if normalize_audit_strategy(strategy) != "spread" or size == 1:
+        return [(start + index) % product_count for index in range(size)]
+    if size >= product_count:
+        return list(range(product_count))
+    usable = product_count - 1
+    return sorted({round(index * usable / (size - 1)) for index in range(size)})
 
 
 def parse_category_links(html_text: str) -> List[Dict[str, str]]:
@@ -1137,8 +1164,9 @@ async def catalog_audit(
     sample_size: int = Query(10, ge=1, le=25),
     offset: int = Query(0, ge=0),
     refresh: bool = False,
+    strategy: str = Query("slice", pattern="^(slice|spread)$"),
 ) -> Dict[str, Any]:
-    return await live_catalog.audit(sample_size=sample_size, offset=offset, refresh=refresh)
+    return await live_catalog.audit(sample_size=sample_size, offset=offset, refresh=refresh, strategy=strategy)
 
 
 @app.get("/api/products/search")

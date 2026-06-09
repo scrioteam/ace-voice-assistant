@@ -207,12 +207,14 @@ def test_parse_sitemap_index_accepts_namespaced_ace_urls():
 
 def test_catalog_audit_resolves_sitemap_products(monkeypatch):
     class FakeLiveCatalog:
-        async def audit(self, sample_size=10, offset=0, refresh=False):
+        async def audit(self, sample_size=10, offset=0, refresh=False, strategy="slice"):
             return {
                 "enabled": True,
                 "sitemap_product_count": 33393,
                 "sample_size": sample_size,
                 "offset": offset,
+                "strategy": strategy,
+                "sampled_indexes": [0],
                 "resolved_count": sample_size,
                 "failed_count": 0,
                 "resolved_products": [{"sku": "5750243", "resolved": True, "product": {"sku": "5750243"}}],
@@ -221,14 +223,20 @@ def test_catalog_audit_resolves_sitemap_products(monkeypatch):
             }
 
     monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
-    response = client.get("/api/catalog/audit", params={"sample_size": 1, "offset": 4, "refresh": "true"})
+    response = client.get("/api/catalog/audit", params={"sample_size": 1, "offset": 4, "refresh": "true", "strategy": "spread"})
     assert response.status_code == 200
     data = response.json()
     assert data["sitemap_product_count"] == 33393
     assert data["resolved_count"] == 1
     assert data["failed_count"] == 0
     assert data["offset"] == 4
+    assert data["strategy"] == "spread"
     assert data["refresh"] is True
+
+
+def test_catalog_audit_indexes_can_spread_across_catalog():
+    assert server.catalog_audit_indexes(10, 4, strategy="spread") == [0, 3, 6, 9]
+    assert server.catalog_audit_indexes(10, 4, offset=8, strategy="slice") == [8, 9, 0, 1]
 
 
 def test_sitemap_products_extend_live_search(monkeypatch):
