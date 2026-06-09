@@ -94,6 +94,10 @@ def normalize_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value or "")).casefold().strip()
 
 
+def sku_key(value: Any) -> str:
+    return normalize_text(value).replace(" ", "")
+
+
 def parse_price(value: Any) -> Optional[float]:
     if value is None:
         return None
@@ -261,9 +265,9 @@ class Catalog:
     async def refresh_sofas(self) -> Dict[str, Any]:
         products = await scrape_category(f"{ACE_ORIGIN}/furniture/living-room-furniture/living-room-sofas")
         if products:
-            existing = {p.sku: p for p in self.products}
+            existing = {sku_key(p.sku): p for p in self.products}
             for product in products:
-                existing[product.sku] = product
+                existing[sku_key(product.sku)] = product
             self.products = list(existing.values())
             self.save()
         return {"added_or_updated": len(products), "total": len(self.products), "source": self.loaded_from}
@@ -439,9 +443,10 @@ class AceLiveCatalog:
                 for sitemap_url in sitemap_urls:
                     sitemap_text = await self.fetch_text(sitemap_url)
                     for product in parse_sitemap_products(sitemap_text):
-                        if product.sku in seen:
+                        key = sku_key(product.sku)
+                        if key in seen:
                             continue
-                        seen.add(product.sku)
+                        seen.add(key)
                         products.append(product)
                 if products:
                     self.sitemap_products = products
@@ -534,7 +539,8 @@ class AceLiveCatalog:
                 query = product.title
                 search_hits = await self.search(query, limit=5) if query else []
                 result["search_query"] = query
-                result["search_matched"] = any(hit.sku == product.sku for hit in search_hits)
+                expected_sku = sku_key(product.sku)
+                result["search_matched"] = any(sku_key(hit.sku) == expected_sku for hit in search_hits)
                 result["search_result_skus"] = [hit.sku for hit in search_hits]
             return result
 
@@ -568,9 +574,10 @@ class AceLiveCatalog:
                 break
             html_text = await self.fetch_text(url)
             for product in parse_product_cards(html_text, category=query):
-                if product.sku in seen:
+                key = sku_key(product.sku)
+                if key in seen:
                     continue
-                seen.add(product.sku)
+                seen.add(key)
                 products.append(product)
                 if len(products) >= limit:
                     break
@@ -596,7 +603,7 @@ def dedupe_products(products: List[Product]) -> List[Product]:
     deduped: List[Product] = []
     seen: set[str] = set()
     for product in products:
-        key = product.sku or product.url
+        key = sku_key(product.sku) or product.url
         if key in seen:
             continue
         seen.add(key)
@@ -735,9 +742,10 @@ def parse_product_cards(html_text: str, category: str = "") -> List[Product]:
     seen: set[str] = set()
     for card in cards[:80]:
         product = parse_product_card(card, category)
-        if not product or product.sku in seen:
+        key = sku_key(product.sku) if product else ""
+        if not product or key in seen:
             continue
-        seen.add(product.sku)
+        seen.add(key)
         products.append(product)
     return products
 

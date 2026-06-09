@@ -454,6 +454,27 @@ def test_catalog_audit_can_verify_sample_is_searchable(monkeypatch):
     assert result["search_results"][0]["search_result_skus"] == ["4440328"]
 
 
+def test_catalog_audit_matches_alphanumeric_skus_case_insensitively(monkeypatch):
+    live = server.AceLiveCatalog()
+    live.sitemap_products = [
+        server.Product(sku="4498960t", title="מזוודת SwissBrand", url="https://www.ace.co.il/4498960t")
+    ]
+    live.sitemap_loaded_at = server.now()
+
+    async def fake_get(sku):
+        return server.Product(sku="4498960T", title="מזוודת SwissBrand", url="https://www.ace.co.il/4498960T")
+
+    async def fake_search(query, category="", min_price=None, max_price=None, limit=12):
+        return [server.Product(sku="4498960T", title="מזוודת SwissBrand", url="https://www.ace.co.il/4498960T")]
+
+    monkeypatch.setattr(live, "get", fake_get)
+    monkeypatch.setattr(live, "search", fake_search)
+    result = asyncio.run(live.audit(sample_size=1, verify_search=True))
+    assert result["resolved_count"] == 1
+    assert result["search_matched_count"] == 1
+    assert result["search_failed_count"] == 0
+
+
 def test_catalog_audit_indexes_can_spread_across_catalog():
     assert server.catalog_audit_indexes(10, 4, strategy="spread") == [0, 3, 6, 9]
     assert server.catalog_audit_indexes(10, 4, offset=8, strategy="slice") == [8, 9, 0, 1]
@@ -555,6 +576,30 @@ def test_live_search_deduplicates_products_from_multiple_sources(monkeypatch):
     monkeypatch.setattr(live, "get", fake_get)
     products = asyncio.run(live.search("פוף Matera", limit=3))
     assert [product.sku for product in products] == ["4440328"]
+
+
+def test_live_search_deduplicates_skus_case_insensitively(monkeypatch):
+    live = server.AceLiveCatalog()
+    live.sitemap_products = [
+        server.Product(sku="4498960t", title="מזוודת SwissBrand", url="https://www.ace.co.il/4498960t")
+    ]
+    live.sitemap_loaded_at = server.now()
+
+    async def no_urls(*args, **kwargs):
+        return []
+
+    async def duplicate_products(*args, **kwargs):
+        return [server.Product(sku="4498960T", title="מזוודת SwissBrand", url="https://www.ace.co.il/4498960T")]
+
+    async def fake_get(sku):
+        return server.Product(sku="4498960T", title="מזוודת SwissBrand חיה", url=f"https://www.ace.co.il/{sku}")
+
+    monkeypatch.setattr(live, "category_result_urls", no_urls)
+    monkeypatch.setattr(live, "autocomplete_result_urls", no_urls)
+    monkeypatch.setattr(live, "products_from_urls", duplicate_products)
+    monkeypatch.setattr(live, "get", fake_get)
+    products = asyncio.run(live.search("SwissBrand", limit=3))
+    assert [server.sku_key(product.sku) for product in products] == ["4498960t"]
 
 
 def test_sitemap_exact_match_can_outrank_page_results(monkeypatch):
