@@ -50,6 +50,8 @@
     if (!value) return;
     const node = document.createElement("div");
     node.className = "msg " + role;
+    node.lang = "he-IL";
+    node.dir = "rtl";
     node.textContent = value;
     transcript.appendChild(node);
     while (transcript.children.length > 10) transcript.removeChild(transcript.firstElementChild);
@@ -70,8 +72,8 @@
   function canDisplayUserTranscript(text) {
     const value = String(text || "").trim();
     if (!value) return false;
-    if (containsHebrewText(value)) return true;
     if (hasStrongForeignScript(value)) return false;
+    if (containsHebrewText(value)) return true;
     return /^[\d\s.,!?'"()₪%+\-/:A-Za-z]+$/.test(value);
   }
 
@@ -212,9 +214,16 @@
   function setAssistantPanelState(state) {
     const value = state === "closed" || state === "minimized" ? state : "open";
     assistantPanel.classList.toggle("is-minimized", value === "minimized");
-    assistantPanel.classList.toggle("is-hidden", value === "closed");
+    assistantPanel.classList.toggle("is-hidden", value !== "open");
     assistantPanel.setAttribute("aria-expanded", value === "open" ? "true" : "false");
-    assistantLauncher.hidden = value !== "closed";
+    assistantPanel.dataset.panelState = value;
+    assistantLauncher.hidden = value === "open";
+    assistantLauncher.setAttribute(
+      "aria-label",
+      value === "minimized" ? "פתיחת יועץ המכירות הממוזער" : "פתיחת יועץ המכירות"
+    );
+    const launcherText = assistantLauncher.querySelector("span");
+    if (launcherText) launcherText.textContent = value === "minimized" ? "פתח" : "ACE";
     assistantMinimize.textContent = value === "minimized" ? "פתח" : "מזער";
     assistantMinimize.setAttribute("aria-label", value === "minimized" ? "פתיחת היועץ" : "מזעור היועץ");
     localStorage.setItem("ace_assistant_panel_state", value);

@@ -117,14 +117,15 @@ button { cursor: pointer; }
   inset-inline-end: 18px;
   bottom: 18px;
   z-index: 51;
-  width: 58px;
+  min-width: 58px;
   height: 58px;
   border: 0;
-  border-radius: 50%;
+  border-radius: 999px;
   background: var(--ace-red);
   color: #fff;
   box-shadow: var(--shadow);
   font-weight: 900;
+  padding: 0 16px;
 }
 
 .assistant-launcher span {
