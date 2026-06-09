@@ -427,6 +427,30 @@ class AceLiveCatalog:
                 self.sitemap_products = []
         return self.sitemap_products
 
+    async def status(self, refresh: bool = False) -> Dict[str, Any]:
+        if refresh:
+            self.sitemap_loaded_at = 0.0
+            self.category_index_loaded_at = 0.0
+        categories = await self.load_category_index()
+        products = await self.load_sitemap_products() if refresh or self.sitemap_products else self.sitemap_products
+        sample = products[:5]
+        return {
+            "enabled": self.enabled,
+            "last_error": self.last_error,
+            "sources": {
+                "search_pages": f"{ACE_ORIGIN}/catalogsearch/result/?q=...",
+                "autocomplete": ACE_AUTOCOMPLETE_URL,
+                "categories": ACE_ORIGIN + "/",
+                "sitemap": ACE_SITEMAP_URL,
+                "product_pages": ACE_ORIGIN + "/{sku}",
+            },
+            "category_count": len(categories),
+            "sitemap_product_count": len(products),
+            "sitemap_loaded": bool(products),
+            "sitemap_age_seconds": int(now() - self.sitemap_loaded_at) if self.sitemap_loaded_at else None,
+            "sample_products": [product.public() for product in sample],
+        }
+
     async def products_from_urls(self, urls: List[str], query: str, limit: int) -> List[Product]:
         products: List[Product] = []
         seen: set[str] = set()
@@ -982,6 +1006,16 @@ def healthz() -> Dict[str, Any]:
         "products": len(catalog.products),
         "screens": len(screens.screens),
         "catalog_loaded_from": catalog.loaded_from,
+    }
+
+
+@app.get("/api/catalog/status")
+async def catalog_status(refresh: bool = False) -> Dict[str, Any]:
+    status = await live_catalog.status(refresh=refresh)
+    return {
+        "local_fallback_products": len(catalog.products),
+        "local_fallback_source": catalog.loaded_from,
+        "live_catalog": status,
     }
 
 

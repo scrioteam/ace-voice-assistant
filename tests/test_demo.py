@@ -51,6 +51,28 @@ def test_product_search_prefers_live_catalog(monkeypatch):
     assert products[0]["url"] == "https://www.ace.co.il/LIVE-ACE-1"
 
 
+def test_catalog_status_reports_live_catalog(monkeypatch):
+    class FakeLiveCatalog:
+        async def status(self, refresh=False):
+            return {
+                "enabled": True,
+                "category_count": 860,
+                "sitemap_product_count": 33458,
+                "sitemap_loaded": True,
+                "sample_products": [],
+                "refresh": refresh,
+            }
+
+    monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
+    response = client.get("/api/catalog/status", params={"refresh": "true"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["local_fallback_products"] >= 1
+    assert data["live_catalog"]["category_count"] == 860
+    assert data["live_catalog"]["sitemap_product_count"] == 33458
+    assert data["live_catalog"]["refresh"] is True
+
+
 def test_live_catalog_numeric_query_uses_product_details(monkeypatch):
     calls = []
     live = server.AceLiveCatalog()
