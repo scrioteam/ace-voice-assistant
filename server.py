@@ -30,6 +30,12 @@ TRANSCRIPTION_MODEL = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-trans
 OPENAI_CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets"
 OPENAI_TRANSCRIPTIONS_URL = "https://api.openai.com/v1/audio/transcriptions"
 LEASE_SECONDS = 10 * 60
+ACE_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36 AceVoiceAssistantDemo/1.0",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "he-IL,he;q=0.9,en;q=0.8",
+}
 
 
 def now() -> float:
@@ -94,6 +100,17 @@ def parse_price(value: Any) -> Optional[float]:
         return float(cleaned)
     except ValueError:
         return None
+
+
+def absolute_ace_url(value: str) -> str:
+    url = html.unescape(str(value or "").strip())
+    if not url:
+        return ""
+    if url.startswith("//"):
+        return "https:" + url
+    if url.startswith("/"):
+        return ACE_ORIGIN + url
+    return url
 
 
 def product_image_path(sku: str) -> Path:
@@ -248,6 +265,189 @@ class Catalog:
         return {"added_or_updated": len(products), "total": len(self.products), "source": self.loaded_from}
 
 
+class AceLiveCatalog:
+    """Live access to ACE catalog pages.
+
+    ACE currently renders product grids server-side on Magento search/category
+    pages. We query those public pages on demand and parse the same product
+    cards customers see, keeping the local JSON only as an outage fallback.
+    """
+
+    def __init__(self) -> None:
+        self.enabled = os.getenv("ACE_LIVE_CATALOG_DISABLED", "").lower() not in {"1", "true", "yes"}
+        self.last_error = ""
+
+    async def search(
+        self,
+        q: str = "",
+        category: str = "",
+        min_price: Optional[float] = None,
+        max_price: Optional[float] = None,
+        limit: int = 12,
+    ) -> List[Product]:
+        if not self.enabled:
+            return []
+        query = str(q or category or "").strip()
+        if not query:
+            return []
+        url = f"{ACE_ORIGIN}/catalogsearch/result/?q={urllib.parse.quote(query)}"
+        try:
+            html_text = await self.fetch_text(url)
+            products = parse_product_cards(html_text, category=query)
+            filtered = []
+            for product in products:
+                if min_price is not None and product.price is not None and product.price < min_price:
+                    continue
+                if max_price is not None and product.price is not None and product.price > max_price:
+                    continue
+                filtered.append(product)
+            return filtered[: max(1, min(limit, 30))]
+        except (httpx.HTTPError, ValueError) as exc:
+            self.last_error = str(exc)
+            return []
+
+    async def get(self, sku: str) -> Optional[Product]:
+        if not self.enabled:
+            return None
+        clean_sku = str(sku or "").strip()
+        if not clean_sku:
+            return None
+        try:
+            html_text = await self.fetch_text(f"{ACE_ORIGIN}/{urllib.parse.quote(clean_sku)}")
+            return parse_product_page(html_text, clean_sku)
+        except (httpx.HTTPError, ValueError) as exc:
+            self.last_error = str(exc)
+            return None
+
+    async def fetch_text(self, url: str) -> str:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=ACE_HEADERS) as client:
+            response = await client.get(url)
+        response.raise_for_status()
+        if "text/html" not in response.headers.get("content-type", "") and not response.text:
+            raise ValueError("ACE returned an empty catalog response")
+        return response.text
+
+
+def parse_product_cards(html_text: str, category: str = "") -> List[Product]:
+    cards = re.findall(r'<li class="item product product-item".*?</li>', html_text or "", flags=re.I | re.S)
+    products: List[Product] = []
+    seen: set[str] = set()
+    for card in cards[:80]:
+        product = parse_product_card(card, category)
+        if not product or product.sku in seen:
+            continue
+        seen.add(product.sku)
+        products.append(product)
+    return products
+
+
+def regex_text_matches(pattern: str, value: str) -> List[str]:
+    matches = re.findall(pattern, value or "", flags=re.I | re.S)
+    output: List[str] = []
+    for match in matches:
+        if isinstance(match, tuple):
+            output.extend(str(part) for part in match if str(part).strip())
+        elif str(match).strip():
+            output.append(str(match))
+    return output
+
+
+def clean_brand(value: str) -> str:
+    brand = html.unescape(str(value or "")).strip()
+    if not brand or brand.isdigit() or brand.lower().startswith("icon-"):
+        return ""
+    return brand
+
+
+def parse_product_card(card: str, category: str = "") -> Optional[Product]:
+    link_match = re.search(r'<a[^>]+href="([^"]+)"[^>]*class="[^"]*product[^"]*photo', card, flags=re.I)
+    if not link_match:
+        link_match = re.search(r'<a[^>]+href="([^"]+)"', card, flags=re.I)
+    title_match = re.search(r'<strong[^>]+class="[^"]*product-item-name[^"]*"[^>]*>(.*?)</strong>', card, flags=re.I | re.S)
+    img_match = re.search(r'<img[^>]+class="[^"]*product-image-photo[^"]*"[^>]+src="([^"]+)"', card, flags=re.I)
+    brand_match = re.search(r'<div[^>]+class="[^"]*product-item-brand[^"]*"[^>]*>.*?<img[^>]+alt="([^"]*)"', card, flags=re.I | re.S)
+    if not link_match or not title_match:
+        return None
+
+    product_url = absolute_ace_url(link_match.group(1))
+    sku = product_url.rstrip("/").split("/")[-1]
+    title = strip_html(title_match.group(1))
+    prices = re.findall(r'<span class="priceNum">([^<]+)</span>', card, flags=re.I)
+    price = parse_price(prices[0]) if prices else None
+    regular_price = parse_price(prices[1]) if len(prices) > 1 else None
+    promo_text = strip_html(" ".join(regex_text_matches(
+        r'<span[^>]+class="[^"]*(?:savings-percentage-value|joomi-saleswatch-product-text|vat-free-text)[^"]*"[^>]*>(.*?)</span>|'
+        r'<div[^>]+class="[^"]*product-item-sale-expired[^"]*"[^>]*>(.*?)</div>',
+        card,
+    )))
+    return Product(
+        sku=sku,
+        title=title,
+        url=product_url,
+        image_url=absolute_ace_url(img_match.group(1)) if img_match else "",
+        category=category,
+        department=infer_department({"title": title, "category": category, "url": product_url}),
+        brand=clean_brand(brand_match.group(1) if brand_match else ""),
+        price=price,
+        regular_price=regular_price,
+        available="לא זמין" not in strip_html(card),
+        promo=promo_text,
+        tags=expand_query(category),
+        sales_notes=["מוצר חי מאתר ACE.", "המחיר והזמינות נמשכים מהאתר בזמן החיפוש."],
+        last_seen=now(),
+    )
+
+
+def parse_product_page(html_text: str, sku: str) -> Product:
+    set_product = re.search(r"context\.setProduct\((\{.*?\})\)", html_text or "", flags=re.S)
+    data: Dict[str, Any] = {}
+    if set_product:
+        try:
+            data = json.loads(set_product.group(1))
+        except json.JSONDecodeError:
+            data = {}
+    title = str(data.get("name") or "").strip()
+    if not title:
+        title_match = re.search(r'<span[^>]+itemprop="name"[^>]*>(.*?)</span>', html_text or "", flags=re.I | re.S)
+        title = strip_html(title_match.group(1)) if title_match else sku
+    pricing = data.get("pricing") or {}
+    image_url = absolute_ace_url(str(data.get("mainImageUrl") or ""))
+    if not image_url:
+        img_match = re.search(r'<img[^>]+class="[^"]*(?:gallery-placeholder__image|product-image-photo)[^"]*"[^>]+src="([^"]+)"', html_text or "", flags=re.I)
+        image_url = absolute_ace_url(img_match.group(1)) if img_match else ""
+    brand_match = re.search(r'<div[^>]+class="[^"]*product-item-brand[^"]*"[^>]*>.*?<img[^>]+alt="([^"]*)"', html_text or "", flags=re.I | re.S)
+    category = " / ".join(strip_html(v) for v in regex_text_matches(
+        r'<li class="item \d+">.*?(?:<a[^>]*title="([^"]+)"|<strong>(.*?)</strong>)',
+        html_text or "",
+    )[:5])
+    description_match = re.search(r'<div class="product attribute description">.*?<div class="value"[^>]*>(.*?)</div>', html_text or "", flags=re.I | re.S)
+    specs = {}
+    description = strip_html(description_match.group(1)) if description_match else ""
+    if description:
+        specs["תיאור"] = description[:280]
+    promo = strip_html(" ".join(regex_text_matches(
+        r'<span[^>]+class="[^"]*(?:savings-percentage-value|joomi-saleswatch-product-text|vat-free-text)[^"]*"[^>]*>(.*?)</span>|'
+        r'<div[^>]+class="[^"]*product-item-sale-expired[^"]*"[^>]*>(.*?)</div>',
+        html_text or "",
+    )))
+    return Product(
+        sku=str(data.get("sku") or sku),
+        title=title,
+        url=absolute_ace_url(str(data.get("canonicalUrl") or f"{ACE_ORIGIN}/{sku}")),
+        image_url=image_url,
+        category=category,
+        department=infer_department({"title": title, "category": category, "url": data.get("canonicalUrl", "")}),
+        brand=clean_brand(brand_match.group(1) if brand_match else ""),
+        price=parse_price(pricing.get("specialPrice") or pricing.get("regularPrice")),
+        regular_price=parse_price(pricing.get("regularPrice")),
+        available="לא זמין" not in strip_html(html_text or ""),
+        promo=promo,
+        specs=specs,
+        sales_notes=["פרטי מוצר חיים מאתר ACE.", "יש להפנות לדף המוצר לפרטים מחייבים וסופיים."],
+        last_seen=now(),
+    )
+
+
 def expand_query(query: str) -> List[str]:
     q = normalize_text(query)
     terms = [part for part in re.split(r"[\s,.;:!?]+", q) if part]
@@ -316,50 +516,32 @@ def showcase_products(department: str = "", limit: int = 6) -> List[Product]:
     return ordered[: max(1, min(limit, 12))]
 
 
+async def search_catalog(
+    q: str = "",
+    category: str = "",
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    limit: int = 12,
+) -> List[Product]:
+    live_products = await live_catalog.search(q, category, min_price, max_price, limit)
+    if live_products:
+        return live_products
+    return catalog.search(q, category, min_price, max_price, limit)
+
+
+async def get_catalog_product(sku: str) -> Product:
+    live_product = await live_catalog.get(sku)
+    if live_product:
+        return live_product
+    return catalog.get(sku)
+
+
 async def scrape_category(url: str) -> List[Product]:
-    headers = {
-        "User-Agent": "AceVoiceAssistantDemo/1.0",
-        "Accept": "text/html,application/xhtml+xml",
-        "Accept-Language": "he-IL,he;q=0.9,en;q=0.8",
-    }
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=headers) as client:
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True, headers=ACE_HEADERS) as client:
         response = await client.get(url)
     response.raise_for_status()
     html_text = response.text
-    cards = re.findall(r'<li class="item product product-item".*?</li>', html_text, flags=re.I | re.S)
-    products: List[Product] = []
-    for card in cards[:30]:
-        link_match = re.search(r'<a[^>]+href="([^"]+)"[^>]*class="[^"]*product[^"]*photo', card, flags=re.I)
-        if not link_match:
-            link_match = re.search(r'<a[^>]+href="([^"]+)"', card, flags=re.I)
-        title_match = re.search(r'<strong[^>]+class="[^"]*product-item-name[^"]*"[^>]*>(.*?)</strong>', card, flags=re.I | re.S)
-        img_match = re.search(r'<img[^>]+class="[^"]*product-image-photo[^"]*"[^>]+src="([^"]+)"', card, flags=re.I)
-        price_match = re.search(r'<span class="priceNum">([^<]+)</span>', card, flags=re.I)
-        if not link_match or not title_match:
-            continue
-        product_url = html.unescape(link_match.group(1))
-        sku = product_url.rstrip("/").split("/")[-1]
-        title = strip_html(title_match.group(1))
-        price = parse_price(price_match.group(1) if price_match else None)
-        promo_text = strip_html(" ".join(re.findall(r'<span[^>]+class="[^"]*(?:savings-percentage-value|joomi-saleswatch-product-text|vat-free-text)[^"]*"[^>]*>(.*?)</span>', card, flags=re.I | re.S)))
-        products.append(Product(
-            sku=sku,
-            title=title,
-            url=product_url,
-            image_url=html.unescape(img_match.group(1)) if img_match else "",
-            category="ריהוט לסלון / ספות",
-            department="furniture",
-            price=price,
-            available=True,
-            promo=promo_text,
-            tags=["ספה", "סלון", "ריהוט"],
-            sales_notes=[
-                "מוצר אמיתי מאתר ACE שנמשך לעדכון הדמו.",
-                "אפשר להציג אותו על המסך הגדול ולסגור השוואה מול חלופות.",
-            ],
-            last_seen=now(),
-        ))
-    return products
+    return parse_product_cards(html_text, category="ריהוט לסלון / ספות")
 
 
 @dataclass
@@ -486,6 +668,7 @@ class ScreenManager:
 
 
 catalog = Catalog()
+live_catalog = AceLiveCatalog()
 screens = ScreenManager()
 session_memory: Dict[str, Dict[str, Any]] = {}
 
@@ -613,19 +796,19 @@ def healthz() -> Dict[str, Any]:
 
 
 @app.get("/api/products/search")
-def search_products(
+async def search_products(
     q: str = Query("", alias="q"),
     category: str = "",
     min_price: Optional[float] = None,
     max_price: Optional[float] = None,
     limit: int = 12,
 ) -> List[Dict[str, Any]]:
-    return [p.public() for p in catalog.search(q, category, min_price, max_price, limit)]
+    return [p.public() for p in await search_catalog(q, category, min_price, max_price, limit)]
 
 
 @app.get("/api/products/{sku}")
-def product_details(sku: str) -> Dict[str, Any]:
-    return catalog.get(sku).public()
+async def product_details(sku: str) -> Dict[str, Any]:
+    return (await get_catalog_product(sku)).public()
 
 
 @app.get("/api/idle-showcase")
@@ -644,7 +827,7 @@ def idle_showcase(
 
 @app.get("/api/products/{sku}/image")
 async def product_image(sku: str) -> Response:
-    product = catalog.get(sku)
+    product = await get_catalog_product(sku)
     IMAGE_CACHE_DIR.mkdir(exist_ok=True)
     path = product_image_path(product.sku)
     if path.exists():
@@ -652,7 +835,7 @@ async def product_image(sku: str) -> Response:
     if product.image_url:
         try:
             async with httpx.AsyncClient(timeout=12, follow_redirects=True) as client:
-                resp = await client.get(product.image_url, headers={"User-Agent": "AceVoiceAssistantDemo/1.0"})
+                resp = await client.get(product.image_url, headers=ACE_HEADERS)
             if resp.status_code < 400 and resp.content:
                 path.write_bytes(resp.content)
                 return Response(resp.content, media_type=resp.headers.get("content-type", "image/jpeg"))
@@ -722,9 +905,10 @@ async def show_on_screen(request: Request) -> Dict[str, Any]:
     body = await request.json()
     session_id = str(body.get("session_id") or "demo-session")
     product_ids = [str(v) for v in body.get("product_ids", [])]
-    products = [catalog.get(sku).public() for sku in product_ids] if product_ids else [
-        p.public() for p in catalog.search(body.get("query", "ספה"), limit=3)
-    ]
+    if product_ids:
+        products = [(await get_catalog_product(sku)).public() for sku in product_ids]
+    else:
+        products = [p.public() for p in await search_catalog(body.get("query", "ספה"), limit=3)]
     if not products:
         raise HTTPException(status_code=404, detail="No products to show")
     department = body.get("department") or products[0].get("department") or "general"
@@ -747,8 +931,8 @@ def demo_reset() -> Dict[str, Any]:
 
 
 @app.post("/api/demo/preload-sofa")
-def preload_sofa() -> Dict[str, Any]:
-    products = [p.public() for p in catalog.search("ספה נפתחת סלון", max_price=4000, limit=3)]
+async def preload_sofa() -> Dict[str, Any]:
+    products = [p.public() for p in await search_catalog("ספה נפתחת סלון", max_price=4000, limit=3)]
     screen = screens.show(
         session_id="presenter-preload",
         products=products,
@@ -798,9 +982,9 @@ async def demo_chat(request: Request) -> Dict[str, Any]:
     wants_bed = any(term in lower for term in ["מיטה", "נפתחת", "אורח", "bed"])
     max_price = parse_price(wants_budget.group(1)) if wants_budget else 4000
     query = "ספה נפתחת מיטה" if wants_bed else "ספה סלון"
-    products = [p.public() for p in catalog.search(query, max_price=max_price, limit=3)]
+    products = [p.public() for p in await search_catalog(query, max_price=max_price, limit=3)]
     if not products:
-        products = [p.public() for p in catalog.search("ספה", limit=3)]
+        products = [p.public() for p in await search_catalog("ספה", limit=3)]
 
     best = products[0]
     screen = screens.show(

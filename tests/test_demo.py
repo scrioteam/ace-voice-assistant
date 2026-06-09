@@ -9,6 +9,7 @@ client = TestClient(server.app)
 def setup_function():
     server.screens.reset()
     server.session_memory.clear()
+    server.live_catalog.enabled = False
 
 
 def test_sofa_search_uses_fallback_catalog():
@@ -19,6 +20,33 @@ def test_sofa_search_uses_fallback_catalog():
     assert products[0]["sku"] == "601125"
     assert products[0]["available"] is True
     assert products[0]["image"].startswith("/api/products/601125/image")
+
+
+def test_product_search_prefers_live_catalog(monkeypatch):
+    class FakeLiveCatalog:
+        enabled = True
+
+        async def search(self, q="", category="", min_price=None, max_price=None, limit=12):
+            return [
+                server.Product(
+                    sku="LIVE-ACE-1",
+                    title="מוצר חי מאתר ACE",
+                    url="https://www.ace.co.il/LIVE-ACE-1",
+                    image_url="https://www.ace.co.il/media/live.jpg",
+                    price=99,
+                    available=True,
+                )
+            ]
+
+        async def get(self, sku):
+            return None
+
+    monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
+    response = client.get("/api/products/search", params={"q": "מקדחה"})
+    assert response.status_code == 200
+    products = response.json()
+    assert products[0]["sku"] == "LIVE-ACE-1"
+    assert products[0]["url"] == "https://www.ace.co.il/LIVE-ACE-1"
 
 
 def test_show_assigns_only_available_plumbing_screen_by_default():
