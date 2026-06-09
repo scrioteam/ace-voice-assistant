@@ -353,7 +353,10 @@ class AceLiveCatalog:
             return None
         try:
             html_text = await self.fetch_text(f"{ACE_ORIGIN}/{urllib.parse.quote(clean_sku)}")
-            return parse_product_page(html_text, clean_sku)
+            product = parse_product_page(html_text, clean_sku)
+            render_products = await self.render_info_products([product.sku or clean_sku])
+            render_by_sku = {sku_key(item.sku): item for item in render_products}
+            return merge_render_info_product(product, render_by_sku.get(sku_key(product.sku or clean_sku)))
         except (httpx.HTTPError, ValueError) as exc:
             self.last_error = str(exc)
             return None

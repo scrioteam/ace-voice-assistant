@@ -297,6 +297,62 @@ def test_live_catalog_alphanumeric_query_uses_product_details(monkeypatch):
     assert products[0].sku == "4498960T"
 
 
+def test_live_catalog_get_enriches_product_page_with_render_info(monkeypatch):
+    live = server.AceLiveCatalog()
+
+    async def fake_fetch_text(url):
+        return '''
+        <script>
+        context.setProduct({"sku":"4497137","name":"כותרת מדף מוצר","canonicalUrl":"https://www.ace.co.il/4497137","mainImageUrl":"https://www.ace.co.il/media/page.jpg","pricing":{"regularPrice":999}})
+        </script>
+        '''
+
+    async def fake_render_info(skus):
+        assert skus == ["4497137"]
+        return [
+            server.Product(
+                sku="4497137",
+                title="כותרת render-info",
+                url="https://www.ace.co.il/4497137",
+                image_url="https://www.ace.co.il/media/render.jpg",
+                price=100,
+                regular_price=120,
+                available=False,
+                sales_notes=["פרטי מוצר מ-ACE products-render-info."],
+            )
+        ]
+
+    monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
+    monkeypatch.setattr(live, "render_info_products", fake_render_info)
+    product = asyncio.run(live.get("4497137"))
+    assert product.title == "כותרת render-info"
+    assert product.price == 100
+    assert product.regular_price == 120
+    assert product.available is False
+    assert product.image_url.endswith("render.jpg")
+
+
+def test_live_catalog_get_keeps_product_page_when_render_info_is_unavailable(monkeypatch):
+    live = server.AceLiveCatalog()
+
+    async def fake_fetch_text(url):
+        return '''
+        <script>
+        context.setProduct({"sku":"4497137","name":"כותרת מדף מוצר","canonicalUrl":"https://www.ace.co.il/4497137","mainImageUrl":"https://www.ace.co.il/media/page.jpg","pricing":{"regularPrice":999}})
+        </script>
+        '''
+
+    async def no_render_info(skus):
+        return []
+
+    monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
+    monkeypatch.setattr(live, "render_info_products", no_render_info)
+    product = asyncio.run(live.get("4497137"))
+    assert product.title == "כותרת מדף מוצר"
+    assert product.price == 999
+    assert product.image_url.endswith("page.jpg")
+
+
 def test_sku_like_live_search_miss_falls_back_to_regular_search(monkeypatch):
     live = server.AceLiveCatalog()
     calls = []
