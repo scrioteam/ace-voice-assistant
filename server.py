@@ -907,17 +907,38 @@ async def search_catalog(
     max_price: Optional[float] = None,
     limit: int = 12,
 ) -> List[Product]:
+    result = await search_catalog_with_source(q, category, min_price, max_price, limit)
+    return result["products"]
+
+
+async def search_catalog_with_source(
+    q: str = "",
+    category: str = "",
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+    limit: int = 12,
+    live_only: bool = False,
+) -> Dict[str, Any]:
     live_products = await live_catalog.search(q, category, min_price, max_price, limit)
     if live_products:
-        return live_products
-    return catalog.search(q, category, min_price, max_price, limit)
+        return {"source": "live", "fallback_used": False, "products": live_products}
+    if live_only:
+        return {"source": "live", "fallback_used": False, "products": []}
+    return {"source": "fallback", "fallback_used": True, "products": catalog.search(q, category, min_price, max_price, limit)}
 
 
 async def get_catalog_product(sku: str) -> Product:
+    result = await get_catalog_product_with_source(sku)
+    return result["product"]
+
+
+async def get_catalog_product_with_source(sku: str, live_only: bool = False) -> Dict[str, Any]:
     live_product = await live_catalog.get(sku)
     if live_product:
-        return live_product
-    return catalog.get(sku)
+        return {"source": "live", "fallback_used": False, "product": live_product}
+    if live_only:
+        raise HTTPException(status_code=404, detail="Live ACE product not found")
+    return {"source": "fallback", "fallback_used": True, "product": catalog.get(sku)}
 
 
 async def scrape_category(url: str) -> List[Product]:
@@ -1213,13 +1234,34 @@ async def search_products(
     min_price: Optional[float] = None,
     max_price: Optional[float] = None,
     limit: int = 12,
-) -> List[Dict[str, Any]]:
-    return [p.public() for p in await search_catalog(q, category, min_price, max_price, limit)]
+    live_only: bool = False,
+    include_meta: bool = False,
+) -> Any:
+    result = await search_catalog_with_source(q, category, min_price, max_price, limit, live_only=live_only)
+    products = [p.public() for p in result["products"]]
+    if include_meta:
+        return {
+            "source": result["source"],
+            "fallback_used": result["fallback_used"],
+            "live_only": live_only,
+            "count": len(products),
+            "products": products,
+        }
+    return products
 
 
 @app.get("/api/products/{sku}")
-async def product_details(sku: str) -> Dict[str, Any]:
-    return (await get_catalog_product(sku)).public()
+async def product_details(sku: str, live_only: bool = False, include_meta: bool = False) -> Dict[str, Any]:
+    result = await get_catalog_product_with_source(sku, live_only=live_only)
+    product = result["product"].public()
+    if include_meta:
+        return {
+            "source": result["source"],
+            "fallback_used": result["fallback_used"],
+            "live_only": live_only,
+            "product": product,
+        }
+    return product
 
 
 @app.get("/api/idle-showcase")

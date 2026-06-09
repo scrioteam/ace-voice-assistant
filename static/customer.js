@@ -269,15 +269,27 @@
         if (args.min_price != null) params.set("min_price", args.min_price);
         if (args.max_price != null) params.set("max_price", args.max_price);
         if (args.limit != null) params.set("limit", args.limit);
-        const products = await fetch("/api/products/search?" + params.toString()).then((r) => r.json());
+        params.set("include_meta", "true");
+        const data = await fetch("/api/products/search?" + params.toString()).then((r) => r.json());
+        const products = Array.isArray(data) ? data : (data.products || []);
         renderProducts(products);
-        sendTool(id, { products, found: products.length });
+        sendTool(id, {
+          products,
+          found: products.length,
+          source: data.source || "unknown",
+          fallback_used: Boolean(data.fallback_used),
+        });
         return;
       }
       if (name === "get_product_details") {
-        const product = await fetch("/api/products/" + encodeURIComponent(args.sku)).then((r) => r.json());
+        const data = await fetch("/api/products/" + encodeURIComponent(args.sku) + "?include_meta=true").then((r) => r.json());
+        const product = data.product || data;
         renderProducts([product]);
-        sendTool(id, product);
+        sendTool(id, {
+          ...product,
+          source: data.source || "unknown",
+          fallback_used: Boolean(data.fallback_used),
+        });
         return;
       }
       if (name === "get_screen_status") {

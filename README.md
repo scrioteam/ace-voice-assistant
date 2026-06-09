@@ -32,6 +32,7 @@ Open:
 - `POST /api/demo/refresh-catalog` tries to refresh sofa products from public ACE pages.
 - `GET /api/catalog/status?refresh=true` loads the live ACE sitemap/category sources and reports coverage.
 - `GET /api/catalog/audit?sample_size=5&strategy=spread&verify_search=true&refresh=true` samples live sitemap products across the catalog and verifies they resolve through ACE product pages and assistant search.
+- `GET /api/products/search?q=...&live_only=true&include_meta=true` proves a search result came from live ACE access instead of demo fallback data.
 - Product images are cached under `data/image_cache` after first successful fetch.
 
 ## Tests

@@ -51,6 +51,49 @@ def test_product_search_prefers_live_catalog(monkeypatch):
     assert products[0]["url"] == "https://www.ace.co.il/LIVE-ACE-1"
 
 
+def test_product_search_can_report_live_source(monkeypatch):
+    class FakeLiveCatalog:
+        enabled = True
+
+        async def search(self, q="", category="", min_price=None, max_price=None, limit=12):
+            return [server.Product(sku="LIVE-ACE-2", title="מוצר חי", url="https://www.ace.co.il/LIVE-ACE-2")]
+
+        async def get(self, sku):
+            return None
+
+    monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
+    response = client.get("/api/products/search", params={"q": "מוצר", "include_meta": "true", "live_only": "true"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "live"
+    assert data["fallback_used"] is False
+    assert data["live_only"] is True
+    assert data["products"][0]["sku"] == "LIVE-ACE-2"
+
+
+def test_live_only_search_does_not_fallback_to_demo_catalog():
+    response = client.get("/api/products/search", params={"q": "ספה נפתחת", "live_only": "true", "include_meta": "true"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "live"
+    assert data["fallback_used"] is False
+    assert data["products"] == []
+
+
+def test_product_details_can_report_fallback_source():
+    response = client.get("/api/products/601125", params={"include_meta": "true"})
+    assert response.status_code == 200
+    data = response.json()
+    assert data["source"] == "fallback"
+    assert data["fallback_used"] is True
+    assert data["product"]["sku"] == "601125"
+
+
+def test_live_only_product_details_does_not_fallback_to_demo_catalog():
+    response = client.get("/api/products/601125", params={"live_only": "true", "include_meta": "true"})
+    assert response.status_code == 404
+
+
 def test_catalog_status_reports_live_catalog(monkeypatch):
     class FakeLiveCatalog:
         async def status(self, refresh=False):
