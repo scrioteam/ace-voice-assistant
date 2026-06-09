@@ -100,6 +100,15 @@ def test_realtime_product_tools_are_described_as_live_only():
     assert "לא מוצרי fallback" in tools["search_products"]["description"]
     assert "ישירות מדף מוצר חי" in tools["get_product_details"]["description"]
     assert "לא משתמש ב-fallback" in tools["get_product_details"]["description"]
+    assert "SKU-ים שהתקבלו מתוצאות live" in tools["show_on_screen"]["description"]
+    assert "לא ב-fallback" in tools["show_on_screen"]["description"]
+
+
+def test_system_prompt_requires_live_catalog_products():
+    assert "תוצאות live של כלי search_products או get_product_details בלבד" in server.SYSTEM_PROMPT
+    assert "fallback_used=true" in server.SYSTEM_PROMPT
+    assert "source שאינו live" in server.SYSTEM_PROMPT
+    assert "רק עם SKU-ים שחזרו מתוצאות live" in server.SYSTEM_PROMPT
 
 
 def test_customer_realtime_product_calls_request_live_only_catalog():
