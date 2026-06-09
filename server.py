@@ -676,16 +676,18 @@ def parse_sitemap_products(xml_text: str) -> List[Product]:
                 products.append(product)
     except ET.ParseError:
         for block in re.findall(r"<url>(.*?)</url>", xml_text or "", flags=re.I | re.S):
-            loc_match = re.search(r"<loc>(https://www\.ace\.co\.il/(\d{5,10}))</loc>", block, flags=re.I)
+            loc_match = re.search(r"<loc>(https://www\.ace\.co\.il/([A-Za-z0-9]{5,20}))</loc>", block, flags=re.I)
             if not loc_match:
                 continue
             image_match = re.search(r"<image:loc>(.*?)</image:loc>", block, flags=re.I | re.S)
+            if not image_match:
+                continue
             title_match = re.search(r"<image:title>(.*?)</image:title>", block, flags=re.I | re.S)
             product = sitemap_product(
                 loc_match.group(2),
                 absolute_ace_url(loc_match.group(1)),
                 strip_html(title_match.group(1)) if title_match else loc_match.group(2),
-                absolute_ace_url(image_match.group(1)) if image_match else "",
+                absolute_ace_url(image_match.group(1)),
             )
             if product:
                 products.append(product)
@@ -695,7 +697,7 @@ def parse_sitemap_products(xml_text: str) -> List[Product]:
 def sitemap_node_to_product(loc_text: str, node: ET.Element) -> Optional[Product]:
     url = absolute_ace_url(loc_text or "")
     sku = url.rstrip("/").split("/")[-1]
-    if not re.fullmatch(r"\d{5,10}", sku or ""):
+    if not re.fullmatch(r"[A-Za-z0-9]{5,20}", sku or ""):
         return None
     if urllib.parse.urlparse(url).path.strip("/") != sku:
         return None
@@ -708,6 +710,8 @@ def sitemap_node_to_product(loc_text: str, node: ET.Element) -> Optional[Product
             image_url = absolute_ace_url(text)
         elif tag == "title" and text:
             title = strip_html(text)
+    if not image_url:
+        return None
     return sitemap_product(sku, url, title, image_url)
 
 

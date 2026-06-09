@@ -362,6 +362,23 @@ def test_parse_sitemap_products_excludes_numeric_category_urls():
     assert [product.sku for product in products] == ["4440328"]
 
 
+def test_parse_sitemap_products_accepts_alphanumeric_product_skus():
+    xml = '''
+    <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url>
+        <loc>https://www.ace.co.il/4498960t</loc>
+        <image:image xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+          <image:loc>https://www.ace.co.il/media/catalog/product/4/4/4498960t.jpg</image:loc>
+          <image:title>מוצר ACE עם מקט אלפאנומרי</image:title>
+        </image:image>
+      </url>
+    </urlset>
+    '''
+    products = server.parse_sitemap_products(xml)
+    assert [product.sku for product in products] == ["4498960t"]
+    assert products[0].image_url.endswith("4498960t.jpg")
+
+
 def test_parse_sitemap_index_accepts_namespaced_ace_urls():
     xml = '''
     <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
