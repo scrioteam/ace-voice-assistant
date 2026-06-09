@@ -64,9 +64,7 @@
 
   function hasStrongForeignScript(text) {
     const value = String(text || "");
-    const foreignMatches = value.match(/[\u0400-\u04ff\u0600-\u06ff]/g) || [];
-    const letters = value.match(/[A-Za-z\u0590-\u05ff\u0400-\u04ff\u0600-\u06ff]/g) || [];
-    return foreignMatches.length >= 3 && foreignMatches.length / Math.max(letters.length, 1) > 0.35;
+    return /[\u0400-\u04ff\u0600-\u06ff]/.test(value);
   }
 
   function canDisplayUserTranscript(text) {
@@ -214,10 +212,10 @@
   function setAssistantPanelState(state) {
     const value = state === "closed" || state === "minimized" ? state : "open";
     assistantPanel.classList.toggle("is-minimized", value === "minimized");
-    assistantPanel.classList.toggle("is-hidden", value !== "open");
+    assistantPanel.classList.toggle("is-hidden", value === "closed");
     assistantPanel.setAttribute("aria-expanded", value === "open" ? "true" : "false");
     assistantPanel.dataset.panelState = value;
-    assistantLauncher.hidden = value === "open";
+    assistantLauncher.hidden = value !== "closed";
     assistantLauncher.setAttribute(
       "aria-label",
       value === "minimized" ? "פתיחת יועץ המכירות הממוזער" : "פתיחת יועץ המכירות"

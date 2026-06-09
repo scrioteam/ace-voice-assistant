@@ -121,18 +121,21 @@ def test_customer_realtime_product_calls_request_live_only_catalog():
 
 def test_customer_panel_minimize_uses_visible_launcher():
     js = (server.STATIC_DIR / "customer.js").read_text(encoding="utf-8")
-    assert 'assistantPanel.classList.toggle("is-hidden", value !== "open")' in js
-    assert 'assistantLauncher.hidden = value === "open"' in js
+    assert 'assistantPanel.classList.toggle("is-hidden", value === "closed")' in js
+    assert 'assistantLauncher.hidden = value !== "closed"' in js
     assert 'value === "minimized" ? "פתח" : "ACE"' in js
 
 
 def test_customer_voice_transcript_rejects_foreign_script_before_hebrew():
     js = (server.STATIC_DIR / "customer.js").read_text(encoding="utf-8")
+    css = (server.STATIC_DIR / "app.css").read_text(encoding="utf-8")
     assert "if (hasStrongForeignScript(value)) return false;" in js
     assert "if (containsHebrewText(value)) return true;" in js
     assert js.index("if (hasStrongForeignScript(value)) return false;") < js.index("if (containsHebrewText(value)) return true;")
+    assert r"return /[\u0400-\u04ff\u0600-\u06ff]/.test(value);" in js
     assert 'node.lang = "he-IL"' in js
     assert 'node.dir = "rtl"' in js
+    assert "unicode-bidi: plaintext;" in css
 
 
 def test_catalog_status_reports_live_catalog(monkeypatch):
