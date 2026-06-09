@@ -277,6 +277,8 @@ class AceLiveCatalog:
     def __init__(self) -> None:
         self.enabled = os.getenv("ACE_LIVE_CATALOG_DISABLED", "").lower() not in {"1", "true", "yes"}
         self.last_error = ""
+        self.category_index: List[Dict[str, str]] = []
+        self.category_index_loaded_at = 0.0
 
     async def search(
         self,
@@ -296,6 +298,7 @@ class AceLiveCatalog:
                 product = await self.get(query)
                 return [product] if product else []
             urls = [f"{ACE_ORIGIN}/catalogsearch/result/?q={urllib.parse.quote(query)}"]
+            urls.extend(await self.category_result_urls(query, category))
             urls.extend(await self.autocomplete_result_urls(query))
             products = await self.products_from_urls(urls, query, max(1, min(limit, 30)))
             filtered = filter_products_by_price(products, min_price, max_price)
@@ -347,6 +350,42 @@ class AceLiveCatalog:
                     urls.append(url)
         return urls
 
+    async def category_result_urls(self, query: str, category: str = "") -> List[str]:
+        terms = [term for term in expand_query(f"{query} {category}") if len(term) >= 2]
+        if not terms:
+            return []
+        categories = await self.load_category_index()
+        ranked: List[tuple[int, str]] = []
+        for item in categories:
+            title = normalize_text(item["title"])
+            url = item["url"]
+            score = 0
+            for term in terms:
+                if term in title:
+                    score += 3
+                if term in normalize_text(url):
+                    score += 1
+            if score:
+                ranked.append((score, url))
+        ranked.sort(key=lambda value: -value[0])
+        urls: List[str] = []
+        for _, url in ranked[:6]:
+            if url not in urls:
+                urls.append(url)
+        return urls
+
+    async def load_category_index(self) -> List[Dict[str, str]]:
+        if self.category_index and now() - self.category_index_loaded_at < 60 * 60:
+            return self.category_index
+        try:
+            html_text = await self.fetch_text(ACE_ORIGIN + "/")
+            self.category_index = parse_category_links(html_text)
+            self.category_index_loaded_at = now()
+        except (httpx.HTTPError, ValueError):
+            if not self.category_index:
+                self.category_index = []
+        return self.category_index
+
     async def products_from_urls(self, urls: List[str], query: str, limit: int) -> List[Product]:
         products: List[Product] = []
         seen: set[str] = set()
@@ -377,6 +416,22 @@ def filter_products_by_price(
             continue
         filtered.append(product)
     return filtered
+
+
+def parse_category_links(html_text: str) -> List[Dict[str, str]]:
+    links: List[Dict[str, str]] = []
+    seen: set[str] = set()
+    pattern = r'<a href="(https://www\.ace\.co\.il/[^"]+)" class="item-link"[^>]*>.*?<span class="item-title">(.*?)</span>'
+    for match in re.finditer(pattern, html_text or "", flags=re.I | re.S):
+        url = absolute_ace_url(match.group(1)).split("#", 1)[0]
+        title = strip_html(match.group(2))
+        if not title or url in seen:
+            continue
+        if any(part in url for part in ["/customer/", "/checkout/", "/login/"]):
+            continue
+        seen.add(url)
+        links.append({"title": title, "url": url})
+    return links
 
 
 def parse_product_cards(html_text: str, category: str = "") -> List[Product]:

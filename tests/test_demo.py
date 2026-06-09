@@ -97,6 +97,46 @@ def test_autocomplete_urls_are_used_to_extend_live_results(monkeypatch):
     assert [product.sku for product in products] == ["1111111", "2222222"]
 
 
+def test_parse_category_links_from_ace_menu_html():
+    html = '''
+    <a href="https://www.ace.co.il/tools-paint-affixing/work-tools" class="item-link">
+      <span class="item-title">כלי עבודה</span>
+    </a>
+    <a href="https://www.ace.co.il/tools-paint-affixing/work-tools" class="item-link">
+      <span class="item-title">כלי עבודה</span>
+    </a>
+    '''
+    links = server.parse_category_links(html)
+    assert links == [{"title": "כלי עבודה", "url": "https://www.ace.co.il/tools-paint-affixing/work-tools"}]
+
+
+def test_category_urls_are_used_to_extend_live_results(monkeypatch):
+    live = server.AceLiveCatalog()
+    live.category_index = [{"title": "כלי עבודה", "url": "https://www.ace.co.il/tools-paint-affixing/work-tools"}]
+    live.category_index_loaded_at = server.now()
+
+    async def fake_autocomplete(query):
+        return []
+
+    async def fake_fetch_text(url):
+        sku = "3333333" if "work-tools" in url else "1111111"
+        title = "מברגה מקטגוריה" if sku == "3333333" else "מוצר מחיפוש"
+        return f'''
+        <li class="item product product-item">
+          <a href="https://www.ace.co.il/{sku}" class="product photo product-item-photo">
+            <img class="product-image-photo" src="https://www.ace.co.il/media/{sku}.jpg" />
+          </a>
+          <strong class="product name product-item-name">{title}</strong>
+          <span class="priceNum">99</span>
+        </li>
+        '''
+
+    monkeypatch.setattr(live, "autocomplete_result_urls", fake_autocomplete)
+    monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
+    products = asyncio.run(live.search("כלי עבודה", limit=2))
+    assert [product.sku for product in products] == ["1111111", "3333333"]
+
+
 def test_show_assigns_only_available_plumbing_screen_by_default():
     response = client.post(
         "/api/show",
