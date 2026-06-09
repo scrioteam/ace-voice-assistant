@@ -239,6 +239,42 @@ def test_catalog_audit_indexes_can_spread_across_catalog():
     assert server.catalog_audit_indexes(10, 4, offset=8, strategy="slice") == [8, 9, 0, 1]
 
 
+def test_concurrent_sitemap_loads_share_one_fetch(monkeypatch):
+    live = server.AceLiveCatalog()
+    calls = []
+
+    async def fake_fetch_text(url):
+        calls.append(url)
+        await asyncio.sleep(0)
+        if url == server.ACE_SITEMAP_URL:
+            return '''
+            <sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+              <sitemap><loc>https://www.ace.co.il/media/sitemap-5-1.xml</loc></sitemap>
+            </sitemapindex>
+            '''
+        return '''
+        <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+          <url>
+            <loc>https://www.ace.co.il/4440328</loc>
+            <image:image xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
+              <image:loc>https://www.ace.co.il/media/catalog/product/4/4/4440328.jpg</image:loc>
+              <image:title>פוף דגם Matera בגוון אפור בהיר</image:title>
+            </image:image>
+          </url>
+        </urlset>
+        '''
+
+    async def run_two_loads():
+        first, second = await asyncio.gather(live.load_sitemap_products(), live.load_sitemap_products())
+        return first, second
+
+    monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
+    first, second = asyncio.run(run_two_loads())
+    assert [product.sku for product in first] == ["4440328"]
+    assert second is first
+    assert calls == [server.ACE_SITEMAP_URL, "https://www.ace.co.il/media/sitemap-5-1.xml"]
+
+
 def test_sitemap_products_extend_live_search(monkeypatch):
     live = server.AceLiveCatalog()
     live.sitemap_products = [

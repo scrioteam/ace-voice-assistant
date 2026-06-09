@@ -284,6 +284,8 @@ class AceLiveCatalog:
         self.category_index_loaded_at = 0.0
         self.sitemap_products: List[Product] = []
         self.sitemap_loaded_at = 0.0
+        self.sitemap_load_lock: Optional[asyncio.Lock] = None
+        self.sitemap_load_lock_loop: Optional[asyncio.AbstractEventLoop] = None
 
     async def search(
         self,
@@ -416,27 +418,37 @@ class AceLiveCatalog:
 
         return await asyncio.gather(*(enrich(product) for product in products))
 
+    def current_sitemap_load_lock(self) -> asyncio.Lock:
+        loop = asyncio.get_running_loop()
+        if self.sitemap_load_lock is None or self.sitemap_load_lock_loop is not loop:
+            self.sitemap_load_lock = asyncio.Lock()
+            self.sitemap_load_lock_loop = loop
+        return self.sitemap_load_lock
+
     async def load_sitemap_products(self) -> List[Product]:
         if self.sitemap_products and now() - self.sitemap_loaded_at < 6 * 60 * 60:
             return self.sitemap_products
-        try:
-            index_text = await self.fetch_text(ACE_SITEMAP_URL)
-            sitemap_urls = parse_sitemap_index(index_text)
-            products: List[Product] = []
-            seen: set[str] = set()
-            for sitemap_url in sitemap_urls:
-                sitemap_text = await self.fetch_text(sitemap_url)
-                for product in parse_sitemap_products(sitemap_text):
-                    if product.sku in seen:
-                        continue
-                    seen.add(product.sku)
-                    products.append(product)
-            if products:
-                self.sitemap_products = products
-                self.sitemap_loaded_at = now()
-        except (httpx.HTTPError, ValueError):
-            if not self.sitemap_products:
-                self.sitemap_products = []
+        async with self.current_sitemap_load_lock():
+            if self.sitemap_products and now() - self.sitemap_loaded_at < 6 * 60 * 60:
+                return self.sitemap_products
+            try:
+                index_text = await self.fetch_text(ACE_SITEMAP_URL)
+                sitemap_urls = parse_sitemap_index(index_text)
+                products: List[Product] = []
+                seen: set[str] = set()
+                for sitemap_url in sitemap_urls:
+                    sitemap_text = await self.fetch_text(sitemap_url)
+                    for product in parse_sitemap_products(sitemap_text):
+                        if product.sku in seen:
+                            continue
+                        seen.add(product.sku)
+                        products.append(product)
+                if products:
+                    self.sitemap_products = products
+                    self.sitemap_loaded_at = now()
+            except (httpx.HTTPError, ValueError):
+                if not self.sitemap_products:
+                    self.sitemap_products = []
         return self.sitemap_products
 
     async def status(self, refresh: bool = False) -> Dict[str, Any]:
