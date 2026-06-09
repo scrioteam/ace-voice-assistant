@@ -28,7 +28,7 @@ def test_product_search_prefers_live_catalog(monkeypatch):
     class FakeLiveCatalog:
         enabled = True
 
-        async def search(self, q="", category="", min_price=None, max_price=None, limit=12):
+        async def search(self, q="", category="", min_price=None, max_price=None, limit=12, page=1):
             return [
                 server.Product(
                     sku="LIVE-ACE-1",
@@ -55,7 +55,7 @@ def test_product_search_can_report_live_source(monkeypatch):
     class FakeLiveCatalog:
         enabled = True
 
-        async def search(self, q="", category="", min_price=None, max_price=None, limit=12):
+        async def search(self, q="", category="", min_price=None, max_price=None, limit=12, page=1):
             return [server.Product(sku="LIVE-ACE-2", title="מוצר חי", url="https://www.ace.co.il/LIVE-ACE-2")]
 
         async def get(self, sku):
@@ -115,8 +115,39 @@ def test_customer_realtime_product_calls_request_live_only_catalog():
     js = (server.STATIC_DIR / "customer.js").read_text(encoding="utf-8")
     assert 'params.set("include_meta", "true")' in js
     assert 'params.set("live_only", "true")' in js
+    assert 'params.set("page", args.page)' in js
     assert '?include_meta=true&live_only=true' in js
     assert "fallback_used" in js
+
+
+def test_paged_url_adds_or_replaces_page_param():
+    assert server.paged_url("https://www.ace.co.il/catalogsearch/result/?q=x", 1).endswith("?q=x")
+    assert server.paged_url("https://www.ace.co.il/catalogsearch/result/?q=x", 2).endswith("?q=x&p=2")
+    assert server.paged_url("https://www.ace.co.il/furniture?p=4&product_list_order=price", 3).endswith(
+        "?product_list_order=price&p=3"
+    )
+
+
+def test_product_search_forwards_page_to_live_catalog(monkeypatch):
+    class FakeLiveCatalog:
+        enabled = True
+
+        async def search(self, q="", category="", min_price=None, max_price=None, limit=12, page=1):
+            assert page == 2
+            return [server.Product(sku="PAGE-2", title="מוצר עמוד שני", url="https://www.ace.co.il/PAGE-2")]
+
+        async def get(self, sku):
+            return None
+
+    monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
+    response = client.get(
+        "/api/products/search",
+        params={"q": "ספה", "page": 2, "include_meta": "true", "live_only": "true"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["page"] == 2
+    assert data["products"][0]["sku"] == "PAGE-2"
 
 
 def test_customer_panel_minimize_uses_visible_launcher():
@@ -198,7 +229,7 @@ def test_catalog_readiness_reports_healthy_live_path(monkeypatch):
                 "search_failed_count": 0,
             }
 
-        async def search(self, q="", category="", min_price=None, max_price=None, limit=12):
+        async def search(self, q="", category="", min_price=None, max_price=None, limit=12, page=1):
             return [server.Product(sku="4440328", title="פוף Matera", url="https://www.ace.co.il/4440328")]
 
         async def get(self, sku):
@@ -240,7 +271,7 @@ def test_catalog_readiness_fails_when_samples_are_not_searchable(monkeypatch):
                 "search_failed_count": sample_size,
             }
 
-        async def search(self, q="", category="", min_price=None, max_price=None, limit=12):
+        async def search(self, q="", category="", min_price=None, max_price=None, limit=12, page=1):
             return [server.Product(sku="4440328", title="פוף Matera", url="https://www.ace.co.il/4440328")]
 
         async def get(self, sku):
@@ -388,6 +419,63 @@ def test_sku_like_live_search_miss_falls_back_to_regular_search(monkeypatch):
     products = asyncio.run(live.search("abc123"))
     assert calls == [("get", "abc123"), ("products_from_urls", "abc123")]
     assert [product.sku for product in products] == ["1111111"]
+
+
+def test_live_search_requests_requested_page_for_search_urls(monkeypatch):
+    live = server.AceLiveCatalog()
+    seen_urls = []
+
+    async def category_urls(*args, **kwargs):
+        return ["https://www.ace.co.il/furniture/living-room-furniture/living-room-sofas"]
+
+    async def autocomplete_urls(*args, **kwargs):
+        return ["https://www.ace.co.il/catalogsearch/result/?q=alternate&p=7"]
+
+    async def page_products(urls, query, limit):
+        seen_urls.extend(urls)
+        return [server.Product(sku="2222222", title="ספה מעמוד שני", url="https://www.ace.co.il/2222222")]
+
+    async def no_sitemap_products(*args, **kwargs):
+        return []
+
+    monkeypatch.setattr(live, "category_result_urls", category_urls)
+    monkeypatch.setattr(live, "autocomplete_result_urls", autocomplete_urls)
+    monkeypatch.setattr(live, "products_from_urls", page_products)
+    monkeypatch.setattr(live, "sitemap_products_for_query", no_sitemap_products)
+    products = asyncio.run(live.search("ספה", limit=3, page=2))
+    assert products[0].sku == "2222222"
+    assert seen_urls == [
+        "https://www.ace.co.il/furniture/living-room-furniture/living-room-sofas?p=2",
+        "https://www.ace.co.il/catalogsearch/result/?q=%D7%A1%D7%A4%D7%94&p=2",
+        "https://www.ace.co.il/catalogsearch/result/?q=alternate&p=2",
+    ]
+
+
+def test_live_search_uses_sitemap_only_to_fill_page_gaps(monkeypatch):
+    live = server.AceLiveCatalog()
+    sitemap_called = False
+
+    async def no_urls(*args, **kwargs):
+        return []
+
+    async def full_page_products(*args, **kwargs):
+        return [
+            server.Product(sku="1111111", title="ספה אחת", url="https://www.ace.co.il/1111111"),
+            server.Product(sku="2222222", title="ספה שתיים", url="https://www.ace.co.il/2222222"),
+        ]
+
+    async def sitemap_products(*args, **kwargs):
+        nonlocal sitemap_called
+        sitemap_called = True
+        return [server.Product(sku="3333333", title="ספה מסייטמאפ", url="https://www.ace.co.il/3333333")]
+
+    monkeypatch.setattr(live, "category_result_urls", no_urls)
+    monkeypatch.setattr(live, "autocomplete_result_urls", no_urls)
+    monkeypatch.setattr(live, "products_from_urls", full_page_products)
+    monkeypatch.setattr(live, "sitemap_products_for_query", sitemap_products)
+    products = asyncio.run(live.search("ספה", limit=2, page=2))
+    assert sitemap_called is False
+    assert [product.sku for product in products] == ["1111111", "2222222"]
 
 
 def test_autocomplete_urls_are_used_to_extend_live_results(monkeypatch):
@@ -964,6 +1052,22 @@ def test_sitemap_exact_match_can_outrank_page_results(monkeypatch):
     assert [product.sku for product in products] == ["4440328", "1111111"]
 
 
+def test_sitemap_products_for_query_slices_by_page(monkeypatch):
+    live = server.AceLiveCatalog()
+    live.sitemap_products = [
+        server.Product(sku=f"SKU-{index}", title=f"ספה דגם {index}", url=f"https://www.ace.co.il/SKU-{index}", tags=["ספה"])
+        for index in range(1, 7)
+    ]
+    live.sitemap_loaded_at = server.now()
+
+    async def passthrough(products):
+        return products
+
+    monkeypatch.setattr(live, "enrich_sitemap_products", passthrough)
+    products = asyncio.run(live.sitemap_products_for_query("ספה", limit=2, page=2))
+    assert [product.sku for product in products] == ["SKU-3", "SKU-4"]
+
+
 def test_show_assigns_only_available_plumbing_screen_by_default():
     response = client.post(
         "/api/show",
@@ -988,7 +1092,7 @@ def test_show_can_use_live_only_product_sources(monkeypatch):
     class FakeLiveCatalog:
         enabled = True
 
-        async def search(self, q="", category="", min_price=None, max_price=None, limit=12):
+        async def search(self, q="", category="", min_price=None, max_price=None, limit=12, page=1):
             return []
 
         async def get(self, sku):

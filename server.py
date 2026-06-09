@@ -323,24 +323,28 @@ class AceLiveCatalog:
         min_price: Optional[float] = None,
         max_price: Optional[float] = None,
         limit: int = 12,
+        page: int = 1,
     ) -> List[Product]:
         if not self.enabled:
             return []
         query = str(q or category or "").strip()
         if not query:
             return []
+        page_number = normalized_page(page)
+        result_limit = max(1, min(limit, 30))
         try:
-            if is_sku_like(query):
+            if page_number == 1 and is_sku_like(query):
                 product = await self.get(query)
                 if product:
                     return [product]
-            urls = [f"{ACE_ORIGIN}/catalogsearch/result/?q={urllib.parse.quote(query)}"]
-            urls.extend(await self.category_result_urls(query, category))
-            urls.extend(await self.autocomplete_result_urls(query))
-            products = await self.products_from_urls(urls, query, max(1, min(limit, 30)))
-            products.extend(await self.sitemap_products_for_query(query, max(1, min(limit, 30))))
+            urls = [paged_url(url, page_number) for url in await self.category_result_urls(query, category)]
+            urls.append(paged_url(f"{ACE_ORIGIN}/catalogsearch/result/?q={urllib.parse.quote(query)}", page_number))
+            urls.extend(paged_url(url, page_number) for url in await self.autocomplete_result_urls(query))
+            products = await self.products_from_urls(urls, query, result_limit)
+            if len(dedupe_products(products)) < result_limit:
+                products.extend(await self.sitemap_products_for_query(query, result_limit, page=page_number))
             filtered = filter_products_by_price(dedupe_products(products), min_price, max_price)
-            return rank_products_for_query(filtered, query)[: max(1, min(limit, 30))]
+            return rank_products_for_query(filtered, query)[:result_limit]
         except (httpx.HTTPError, ValueError) as exc:
             self.last_error = str(exc)
             return []
@@ -463,10 +467,12 @@ class AceLiveCatalog:
                 self.category_index = []
         return self.category_index
 
-    async def sitemap_products_for_query(self, query: str, limit: int) -> List[Product]:
+    async def sitemap_products_for_query(self, query: str, limit: int, page: int = 1) -> List[Product]:
         terms = expand_query(query)
         if not terms:
             return []
+        result_limit = max(1, min(limit, 30))
+        start = (normalized_page(page) - 1) * result_limit
         products = await self.load_sitemap_products()
         scored: List[tuple[int, Product]] = []
         for product in products:
@@ -474,7 +480,7 @@ class AceLiveCatalog:
             if score > 0:
                 scored.append((score, product))
         scored.sort(key=lambda item: (-item[0], item[1].title))
-        candidates = [product for _, product in scored[: max(1, min(limit, 30))]]
+        candidates = [product for _, product in scored[start : start + result_limit]]
         return await self.enrich_sitemap_products(candidates)
 
     async def enrich_sitemap_products(self, products: List[Product]) -> List[Product]:
@@ -707,6 +713,23 @@ def dedupe_products(products: List[Product]) -> List[Product]:
         seen.add(key)
         deduped.append(product)
     return deduped
+
+
+def normalized_page(page: int) -> int:
+    try:
+        return max(1, min(int(page), 50))
+    except (TypeError, ValueError):
+        return 1
+
+
+def paged_url(url: str, page: int) -> str:
+    page_number = normalized_page(page)
+    if page_number <= 1:
+        return url
+    parsed = urllib.parse.urlparse(url)
+    query = [(key, value) for key, value in urllib.parse.parse_qsl(parsed.query, keep_blank_values=True) if key != "p"]
+    query.append(("p", str(page_number)))
+    return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query)))
 
 
 def rank_products_for_query(products: List[Product], query: str) -> List[Product]:
@@ -1085,8 +1108,9 @@ async def search_catalog(
     min_price: Optional[float] = None,
     max_price: Optional[float] = None,
     limit: int = 12,
+    page: int = 1,
 ) -> List[Product]:
-    result = await search_catalog_with_source(q, category, min_price, max_price, limit)
+    result = await search_catalog_with_source(q, category, min_price, max_price, limit, page=page)
     return result["products"]
 
 
@@ -1097,8 +1121,9 @@ async def search_catalog_with_source(
     max_price: Optional[float] = None,
     limit: int = 12,
     live_only: bool = False,
+    page: int = 1,
 ) -> Dict[str, Any]:
-    live_products = await live_catalog.search(q, category, min_price, max_price, limit)
+    live_products = await live_catalog.search(q, category, min_price, max_price, limit, page=page)
     if live_products:
         return {"source": "live", "fallback_used": False, "products": live_products}
     if live_only:
@@ -1335,6 +1360,7 @@ TOOLS = [
                 "min_price": {"type": "number"},
                 "max_price": {"type": "number"},
                 "limit": {"type": "integer"},
+                "page": {"type": "integer", "description": "מספר עמוד תוצאות באתר ACE כאשר הלקוח מבקש עוד אפשרויות"},
             },
             "required": [],
         },
@@ -1477,16 +1503,18 @@ async def search_products(
     min_price: Optional[float] = None,
     max_price: Optional[float] = None,
     limit: int = 12,
+    page: int = Query(1, ge=1, le=50),
     live_only: bool = False,
     include_meta: bool = False,
 ) -> Any:
-    result = await search_catalog_with_source(q, category, min_price, max_price, limit, live_only=live_only)
+    result = await search_catalog_with_source(q, category, min_price, max_price, limit, live_only=live_only, page=page)
     products = [p.public() for p in result["products"]]
     if include_meta:
         return {
             "source": result["source"],
             "fallback_used": result["fallback_used"],
             "live_only": live_only,
+            "page": page,
             "count": len(products),
             "products": products,
         }

@@ -276,6 +276,7 @@
         if (args.min_price != null) params.set("min_price", args.min_price);
         if (args.max_price != null) params.set("max_price", args.max_price);
         if (args.limit != null) params.set("limit", args.limit);
+        if (args.page != null) params.set("page", args.page);
         params.set("include_meta", "true");
         params.set("live_only", "true");
         const data = await fetch("/api/products/search?" + params.toString()).then((r) => r.json());
