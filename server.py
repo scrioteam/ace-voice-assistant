@@ -1,3 +1,4 @@
+import asyncio
 import html
 import json
 import os
@@ -402,7 +403,18 @@ class AceLiveCatalog:
             if score > 0:
                 scored.append((score, product))
         scored.sort(key=lambda item: (-item[0], item[1].title))
-        return [product for _, product in scored[: max(1, min(limit, 30))]]
+        candidates = [product for _, product in scored[: max(1, min(limit, 30))]]
+        return await self.enrich_sitemap_products(candidates)
+
+    async def enrich_sitemap_products(self, products: List[Product]) -> List[Product]:
+        if not products:
+            return []
+
+        async def enrich(product: Product) -> Product:
+            live_product = await self.get(product.sku)
+            return live_product or product
+
+        return await asyncio.gather(*(enrich(product) for product in products))
 
     async def load_sitemap_products(self) -> List[Product]:
         if self.sitemap_products and now() - self.sitemap_loaded_at < 6 * 60 * 60:
