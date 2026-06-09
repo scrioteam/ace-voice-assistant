@@ -1,3 +1,5 @@
+import asyncio
+
 from fastapi.testclient import TestClient
 
 import server
@@ -47,6 +49,52 @@ def test_product_search_prefers_live_catalog(monkeypatch):
     products = response.json()
     assert products[0]["sku"] == "LIVE-ACE-1"
     assert products[0]["url"] == "https://www.ace.co.il/LIVE-ACE-1"
+
+
+def test_live_catalog_numeric_query_uses_product_details(monkeypatch):
+    calls = []
+    live = server.AceLiveCatalog()
+
+    async def fake_get(sku):
+        calls.append(sku)
+        return server.Product(
+            sku=sku,
+            title="מוצר לפי מקט",
+            url=f"https://www.ace.co.il/{sku}",
+            price=42,
+        )
+
+    monkeypatch.setattr(live, "get", fake_get)
+    products = asyncio.run(live.search("4498444"))
+    assert calls == ["4498444"]
+    assert products[0].sku == "4498444"
+
+
+def test_autocomplete_urls_are_used_to_extend_live_results(monkeypatch):
+    live = server.AceLiveCatalog()
+
+    async def fake_autocomplete(query):
+        return ["https://www.ace.co.il/catalogsearch/result/?q=alternate"]
+
+    async def fake_fetch_text(url):
+        sku = "1111111" if "alternate" not in url else "2222222"
+        title = "מוצר ראשון" if sku == "1111111" else "מוצר נוסף"
+        return f'''
+        <ol class="products list items product-items">
+          <li class="item product product-item">
+            <a href="https://www.ace.co.il/{sku}" class="product photo product-item-photo">
+              <img class="product-image-photo" src="https://www.ace.co.il/media/{sku}.jpg" />
+            </a>
+            <strong class="product name product-item-name">{title}</strong>
+            <span class="priceNum">99</span>
+          </li>
+        </ol>
+        '''
+
+    monkeypatch.setattr(live, "autocomplete_result_urls", fake_autocomplete)
+    monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
+    products = asyncio.run(live.search("בדיקה", limit=2))
+    assert [product.sku for product in products] == ["1111111", "2222222"]
 
 
 def test_show_assigns_only_available_plumbing_screen_by_default():

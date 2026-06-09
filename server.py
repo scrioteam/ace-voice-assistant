@@ -25,6 +25,7 @@ FALLBACK_FILE = DATA_DIR / "fallback_products.json"
 IMAGE_CACHE_DIR = DATA_DIR / "image_cache"
 
 ACE_ORIGIN = "https://www.ace.co.il"
+ACE_AUTOCOMPLETE_URL = f"{ACE_ORIGIN}/mageworx_searchsuiteautocomplete/ajax/index/"
 REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
 TRANSCRIPTION_MODEL = os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe")
 OPENAI_CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets"
@@ -290,17 +291,14 @@ class AceLiveCatalog:
         query = str(q or category or "").strip()
         if not query:
             return []
-        url = f"{ACE_ORIGIN}/catalogsearch/result/?q={urllib.parse.quote(query)}"
         try:
-            html_text = await self.fetch_text(url)
-            products = parse_product_cards(html_text, category=query)
-            filtered = []
-            for product in products:
-                if min_price is not None and product.price is not None and product.price < min_price:
-                    continue
-                if max_price is not None and product.price is not None and product.price > max_price:
-                    continue
-                filtered.append(product)
+            if re.fullmatch(r"\d{5,10}", query):
+                product = await self.get(query)
+                return [product] if product else []
+            urls = [f"{ACE_ORIGIN}/catalogsearch/result/?q={urllib.parse.quote(query)}"]
+            urls.extend(await self.autocomplete_result_urls(query))
+            products = await self.products_from_urls(urls, query, max(1, min(limit, 30)))
+            filtered = filter_products_by_price(products, min_price, max_price)
             return filtered[: max(1, min(limit, 30))]
         except (httpx.HTTPError, ValueError) as exc:
             self.last_error = str(exc)
@@ -326,6 +324,59 @@ class AceLiveCatalog:
         if "text/html" not in response.headers.get("content-type", "") and not response.text:
             raise ValueError("ACE returned an empty catalog response")
         return response.text
+
+    async def fetch_json(self, url: str, params: Dict[str, Any]) -> Dict[str, Any]:
+        headers = {**ACE_HEADERS, "Accept": "application/json, text/javascript, */*; q=0.01", "X-Requested-With": "XMLHttpRequest"}
+        async with httpx.AsyncClient(timeout=12, follow_redirects=True, headers=headers) as client:
+            response = await client.get(url, params=params)
+        response.raise_for_status()
+        return response.json()
+
+    async def autocomplete_result_urls(self, query: str) -> List[str]:
+        try:
+            payload = await self.fetch_json(ACE_AUTOCOMPLETE_URL, {"q": query})
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError):
+            return []
+        urls: List[str] = []
+        for group in payload.get("result", []):
+            if group.get("code") != "suggest":
+                continue
+            for item in group.get("data", [])[:5]:
+                url = absolute_ace_url(str(item.get("url") or ""))
+                if url and url not in urls:
+                    urls.append(url)
+        return urls
+
+    async def products_from_urls(self, urls: List[str], query: str, limit: int) -> List[Product]:
+        products: List[Product] = []
+        seen: set[str] = set()
+        for url in urls:
+            if len(products) >= limit:
+                break
+            html_text = await self.fetch_text(url)
+            for product in parse_product_cards(html_text, category=query):
+                if product.sku in seen:
+                    continue
+                seen.add(product.sku)
+                products.append(product)
+                if len(products) >= limit:
+                    break
+        return products
+
+
+def filter_products_by_price(
+    products: List[Product],
+    min_price: Optional[float] = None,
+    max_price: Optional[float] = None,
+) -> List[Product]:
+    filtered = []
+    for product in products:
+        if min_price is not None and product.price is not None and product.price < min_price:
+            continue
+        if max_price is not None and product.price is not None and product.price > max_price:
+            continue
+        filtered.append(product)
+    return filtered
 
 
 def parse_product_cards(html_text: str, category: str = "") -> List[Product]:
