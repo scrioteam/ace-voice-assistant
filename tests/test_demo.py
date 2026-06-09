@@ -352,8 +352,12 @@ def test_autocomplete_urls_are_used_to_extend_live_results(monkeypatch):
         </ol>
         '''
 
+    async def passthrough_enrichment(products):
+        return products
+
     monkeypatch.setattr(live, "autocomplete_result_urls", fake_autocomplete)
     monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
+    monkeypatch.setattr(live, "enrich_products_with_render_info", passthrough_enrichment)
     products = asyncio.run(live.search("בדיקה", limit=2))
     assert {product.sku for product in products} == {"1111111", "2222222"}
 
@@ -392,10 +396,100 @@ def test_category_urls_are_used_to_extend_live_results(monkeypatch):
         </li>
         '''
 
+    async def passthrough_enrichment(products):
+        return products
+
     monkeypatch.setattr(live, "autocomplete_result_urls", fake_autocomplete)
     monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
+    monkeypatch.setattr(live, "enrich_products_with_render_info", passthrough_enrichment)
     products = asyncio.run(live.search("כלי עבודה", limit=2))
     assert {product.sku for product in products} == {"1111111", "3333333"}
+
+
+def test_product_from_render_info_maps_ace_structured_payload():
+    product = server.product_from_render_info({
+        "url": "https://www.ace.co.il/4497137",
+        "name": "סלון פינתי מודולרי קומפקטי",
+        "is_salable": "1",
+        "currency_code": "ILS",
+        "price_info": {"final_price": 1008.53, "regular_price": 1190},
+        "images": [{"url": "https://www.ace.co.il/media/catalog/product/4/4/4497137_0.jpeg"}],
+    })
+    assert product.sku == "4497137"
+    assert product.price == 1008.53
+    assert product.regular_price == 1190
+    assert product.available is True
+    assert product.image_url.endswith("4497137_0.jpeg")
+    assert "products-render-info" in " ".join(product.sales_notes)
+
+
+def test_render_info_products_uses_ace_storefront_endpoint(monkeypatch):
+    live = server.AceLiveCatalog()
+    calls = []
+
+    async def fake_fetch_json(url, params):
+        calls.append((url, params))
+        return {
+            "items": [
+                {
+                    "sku": "4497137",
+                    "url": "https://www.ace.co.il/4497137",
+                    "name": "מוצר מ-render-info",
+                    "price_info": {"final_price": 100},
+                    "images": [],
+                    "is_salable": "1",
+                    "currency_code": "ILS",
+                }
+            ]
+        }
+
+    monkeypatch.setattr(live, "fetch_json", fake_fetch_json)
+    products = asyncio.run(live.render_info_products(["4497137", "4497137"]))
+    assert [product.sku for product in products] == ["4497137"]
+    assert calls[0][0] == server.ACE_PRODUCTS_RENDER_INFO_URL
+    assert calls[0][1]["searchCriteria[filterGroups][0][filters][0][field]"] == "sku"
+    assert calls[0][1]["searchCriteria[filterGroups][0][filters][0][value]"] == "4497137"
+    assert calls[0][1]["storeId"] == 5
+    assert calls[0][1]["currencyCode"] == "ILS"
+
+
+def test_products_from_urls_enriches_cards_with_render_info(monkeypatch):
+    live = server.AceLiveCatalog()
+
+    async def fake_fetch_text(url):
+        return '''
+        <li class="item product product-item">
+          <a href="https://www.ace.co.il/4497137" class="product photo product-item-photo">
+            <img class="product-image-photo" src="https://www.ace.co.il/media/old.jpg" />
+          </a>
+          <strong class="product name product-item-name">כותרת HTML</strong>
+          <span class="priceNum">999</span>
+        </li>
+        '''
+
+    async def fake_render_info(skus):
+        assert skus == ["4497137"]
+        return [
+            server.Product(
+                sku="4497137",
+                title="כותרת render-info",
+                url="https://www.ace.co.il/4497137",
+                image_url="https://www.ace.co.il/media/new.jpg",
+                price=100,
+                regular_price=120,
+                available=False,
+                sales_notes=["פרטי מוצר מ-ACE products-render-info."],
+            )
+        ]
+
+    monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
+    monkeypatch.setattr(live, "render_info_products", fake_render_info)
+    products = asyncio.run(live.products_from_urls(["https://www.ace.co.il/catalogsearch/result/?q=x"], "x", 3))
+    assert products[0].title == "כותרת render-info"
+    assert products[0].price == 100
+    assert products[0].regular_price == 120
+    assert products[0].available is False
+    assert products[0].image_url.endswith("new.jpg")
 
 
 def test_parse_sitemap_products_from_live_shape():

@@ -28,6 +28,7 @@ IMAGE_CACHE_DIR = DATA_DIR / "image_cache"
 
 ACE_ORIGIN = "https://www.ace.co.il"
 ACE_AUTOCOMPLETE_URL = f"{ACE_ORIGIN}/mageworx_searchsuiteautocomplete/ajax/index/"
+ACE_PRODUCTS_RENDER_INFO_URL = f"{ACE_ORIGIN}/rest/ace/V1/products-render-info"
 ACE_SITEMAP_URL = f"{ACE_ORIGIN}/sitemap.xml"
 NO_IMAGE_SITEMAP_VALIDATION_SECONDS = 6.0
 REALTIME_MODEL = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2")
@@ -387,6 +388,42 @@ class AceLiveCatalog:
                     urls.append(url)
         return urls
 
+    async def render_info_products(self, skus: List[str]) -> List[Product]:
+        clean_skus: List[str] = []
+        seen: set[str] = set()
+        for sku in skus:
+            key = sku_key(sku)
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            clean_skus.append(str(sku).strip())
+        if not clean_skus:
+            return []
+        params = {
+            "searchCriteria[filterGroups][0][filters][0][field]": "sku",
+            "searchCriteria[filterGroups][0][filters][0][value]": ",".join(clean_skus[:30]),
+            "searchCriteria[filterGroups][0][filters][0][condition_type]": "in",
+            "storeId": 5,
+            "currencyCode": "ILS",
+        }
+        try:
+            payload = await self.fetch_json(ACE_PRODUCTS_RENDER_INFO_URL, params)
+        except (httpx.HTTPError, json.JSONDecodeError, ValueError):
+            return []
+        products: List[Product] = []
+        for item in payload.get("items", []):
+            product = product_from_render_info(item)
+            if product:
+                products.append(product)
+        return products
+
+    async def enrich_products_with_render_info(self, products: List[Product]) -> List[Product]:
+        if not products:
+            return []
+        render_products = await self.render_info_products([product.sku for product in products])
+        by_sku = {sku_key(product.sku): product for product in render_products}
+        return [merge_render_info_product(product, by_sku.get(sku_key(product.sku))) for product in products]
+
     async def category_result_urls(self, query: str, category: str = "") -> List[str]:
         terms = [term for term in expand_query(f"{query} {category}") if len(term) >= 2]
         if not terms:
@@ -538,6 +575,7 @@ class AceLiveCatalog:
             "sources": {
                 "search_pages": f"{ACE_ORIGIN}/catalogsearch/result/?q=...",
                 "autocomplete": ACE_AUTOCOMPLETE_URL,
+                "render_info": ACE_PRODUCTS_RENDER_INFO_URL,
                 "categories": ACE_ORIGIN + "/",
                 "sitemap": ACE_SITEMAP_URL,
                 "product_pages": ACE_ORIGIN + "/{sku}",
@@ -638,7 +676,7 @@ class AceLiveCatalog:
                 products.append(product)
                 if len(products) >= limit:
                     break
-        return products
+        return await self.enrich_products_with_render_info(products)
 
 
 def filter_products_by_price(
@@ -864,6 +902,59 @@ def parse_product_card(card: str, category: str = "") -> Optional[Product]:
         tags=expand_query(category),
         sales_notes=["מוצר חי מאתר ACE.", "המחיר והזמינות נמשכים מהאתר בזמן החיפוש."],
         last_seen=now(),
+    )
+
+
+def product_from_render_info(item: Dict[str, Any]) -> Optional[Product]:
+    sku = str(item.get("sku") or "").strip()
+    url = absolute_ace_url(str(item.get("url") or ""))
+    if not sku and url:
+        sku = url.rstrip("/").split("/")[-1]
+    title = strip_html(str(item.get("name") or sku))
+    if not sku or not title:
+        return None
+    price_info = item.get("price_info") or {}
+    image_url = ""
+    for image in item.get("images") or []:
+        image_url = absolute_ace_url(str(image.get("url") or ""))
+        if image_url:
+            break
+    return Product(
+        sku=sku,
+        title=title,
+        url=url or f"{ACE_ORIGIN}/{urllib.parse.quote(sku)}",
+        image_url=image_url,
+        department=infer_department({"title": title, "url": url}),
+        price=parse_price(price_info.get("final_price") or price_info.get("minimal_price")),
+        regular_price=parse_price(price_info.get("regular_price") or price_info.get("max_regular_price")),
+        available=str(item.get("is_salable", "1")).lower() not in {"0", "false", "no"},
+        currency=str(item.get("currency_code") or "ILS"),
+        tags=expand_query(title),
+        sales_notes=["פרטי מוצר מ-ACE products-render-info.", "מחיר וזמינות נמשכו מממשק ה-render של האתר."],
+        last_seen=now(),
+    )
+
+
+def merge_render_info_product(base: Product, render_product: Optional[Product]) -> Product:
+    if not render_product:
+        return base
+    return Product(
+        sku=render_product.sku or base.sku,
+        title=render_product.title or base.title,
+        url=render_product.url or base.url,
+        image_url=render_product.image_url or base.image_url,
+        category=base.category,
+        department=base.department or render_product.department,
+        brand=base.brand,
+        price=render_product.price if render_product.price is not None else base.price,
+        regular_price=render_product.regular_price if render_product.regular_price is not None else base.regular_price,
+        currency=render_product.currency or base.currency,
+        available=render_product.available,
+        promo=base.promo,
+        tags=list(dict.fromkeys([*base.tags, *render_product.tags])),
+        specs=base.specs,
+        sales_notes=list(dict.fromkeys([*base.sales_notes, *render_product.sales_notes])),
+        last_seen=render_product.last_seen or base.last_seen,
     )
 
 
