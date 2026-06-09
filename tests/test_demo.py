@@ -207,7 +207,7 @@ def test_parse_sitemap_index_accepts_namespaced_ace_urls():
 
 def test_catalog_audit_resolves_sitemap_products(monkeypatch):
     class FakeLiveCatalog:
-        async def audit(self, sample_size=10, offset=0, refresh=False, strategy="slice"):
+        async def audit(self, sample_size=10, offset=0, refresh=False, strategy="slice", verify_search=False):
             return {
                 "enabled": True,
                 "sitemap_product_count": 33393,
@@ -217,13 +217,20 @@ def test_catalog_audit_resolves_sitemap_products(monkeypatch):
                 "sampled_indexes": [0],
                 "resolved_count": sample_size,
                 "failed_count": 0,
+                "search_verified": verify_search,
+                "search_matched_count": sample_size if verify_search else 0,
+                "search_failed_count": 0,
                 "resolved_products": [{"sku": "5750243", "resolved": True, "product": {"sku": "5750243"}}],
                 "failed_products": [],
+                "search_results": [],
                 "refresh": refresh,
             }
 
     monkeypatch.setattr(server, "live_catalog", FakeLiveCatalog())
-    response = client.get("/api/catalog/audit", params={"sample_size": 1, "offset": 4, "refresh": "true", "strategy": "spread"})
+    response = client.get(
+        "/api/catalog/audit",
+        params={"sample_size": 1, "offset": 4, "refresh": "true", "strategy": "spread", "verify_search": "true"},
+    )
     assert response.status_code == 200
     data = response.json()
     assert data["sitemap_product_count"] == 33393
@@ -231,7 +238,33 @@ def test_catalog_audit_resolves_sitemap_products(monkeypatch):
     assert data["failed_count"] == 0
     assert data["offset"] == 4
     assert data["strategy"] == "spread"
+    assert data["search_verified"] is True
+    assert data["search_matched_count"] == 1
     assert data["refresh"] is True
+
+
+def test_catalog_audit_can_verify_sample_is_searchable(monkeypatch):
+    live = server.AceLiveCatalog()
+    live.sitemap_products = [
+        server.Product(sku="4440328", title="פוף Matera", url="https://www.ace.co.il/4440328", tags=["פוף", "matera"])
+    ]
+    live.sitemap_loaded_at = server.now()
+
+    async def fake_get(sku):
+        return server.Product(sku=sku, title="פוף Matera חי", url=f"https://www.ace.co.il/{sku}")
+
+    async def fake_search(query, category="", min_price=None, max_price=None, limit=12):
+        return [server.Product(sku="4440328", title="פוף Matera חי", url="https://www.ace.co.il/4440328")]
+
+    monkeypatch.setattr(live, "get", fake_get)
+    monkeypatch.setattr(live, "search", fake_search)
+    result = asyncio.run(live.audit(sample_size=1, verify_search=True))
+    assert result["resolved_count"] == 1
+    assert result["search_verified"] is True
+    assert result["search_matched_count"] == 1
+    assert result["search_failed_count"] == 0
+    assert result["search_results"][0]["search_query"] == "פוף Matera"
+    assert result["search_results"][0]["search_result_skus"] == ["4440328"]
 
 
 def test_catalog_audit_indexes_can_spread_across_catalog():

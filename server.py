@@ -481,6 +481,7 @@ class AceLiveCatalog:
         offset: int = 0,
         refresh: bool = False,
         strategy: str = "slice",
+        verify_search: bool = False,
     ) -> Dict[str, Any]:
         if refresh:
             self.sitemap_loaded_at = 0.0
@@ -495,8 +496,12 @@ class AceLiveCatalog:
                 "sampled_indexes": [],
                 "resolved_count": 0,
                 "failed_count": 0,
+                "search_verified": bool(verify_search),
+                "search_matched_count": 0,
+                "search_failed_count": 0,
                 "resolved_products": [],
                 "failed_products": [],
+                "search_results": [],
             }
         size = max(1, min(sample_size, 25))
         start = max(0, min(offset, len(products) - 1))
@@ -506,16 +511,25 @@ class AceLiveCatalog:
 
         async def resolve(product: Product) -> Dict[str, Any]:
             live_product = await self.get(product.sku)
-            return {
+            result = {
                 "sku": product.sku,
                 "sitemap_title": product.title,
                 "resolved": bool(live_product),
                 "product": live_product.public() if live_product else None,
             }
+            if verify_search:
+                query = product.title
+                search_hits = await self.search(query, limit=5) if query else []
+                result["search_query"] = query
+                result["search_matched"] = any(hit.sku == product.sku for hit in search_hits)
+                result["search_result_skus"] = [hit.sku for hit in search_hits]
+            return result
 
         checked = await asyncio.gather(*(resolve(product) for product in sample))
         resolved = [item for item in checked if item["resolved"]]
         failed = [item for item in checked if not item["resolved"]]
+        search_results = [item for item in checked if "search_matched" in item]
+        search_failed = [item for item in search_results if not item["search_matched"]]
         return {
             "enabled": self.enabled,
             "sitemap_product_count": len(products),
@@ -525,8 +539,12 @@ class AceLiveCatalog:
             "sampled_indexes": indexes,
             "resolved_count": len(resolved),
             "failed_count": len(failed),
+            "search_verified": bool(verify_search),
+            "search_matched_count": len(search_results) - len(search_failed),
+            "search_failed_count": len(search_failed),
             "resolved_products": resolved,
             "failed_products": failed,
+            "search_results": search_results,
         }
 
     async def products_from_urls(self, urls: List[str], query: str, limit: int) -> List[Product]:
@@ -1177,8 +1195,15 @@ async def catalog_audit(
     offset: int = Query(0, ge=0),
     refresh: bool = False,
     strategy: str = Query("slice", pattern="^(slice|spread)$"),
+    verify_search: bool = False,
 ) -> Dict[str, Any]:
-    return await live_catalog.audit(sample_size=sample_size, offset=offset, refresh=refresh, strategy=strategy)
+    return await live_catalog.audit(
+        sample_size=sample_size,
+        offset=offset,
+        refresh=refresh,
+        strategy=strategy,
+        verify_search=verify_search,
+    )
 
 
 @app.get("/api/products/search")
