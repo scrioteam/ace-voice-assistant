@@ -720,11 +720,14 @@ class AceLiveCatalog:
     async def products_from_urls(self, urls: List[str], query: str, limit: int) -> List[Product]:
         products: List[Product] = []
         seen: set[str] = set()
+        terms = expand_query(query)
         for url in urls:
             if len(products) >= limit:
                 break
             html_text = await self.fetch_text(url)
             for product in parse_product_cards(html_text, category=query):
+                if terms and not product_matches_terms(product, terms, include_category=False):
+                    continue
                 key = sku_key(product.sku)
                 if key in seen:
                     continue
@@ -797,10 +800,21 @@ def asks_for_more_products(text: str) -> bool:
     )
 
 
-def product_matches_terms(product: Product, terms: List[str]) -> bool:
+def product_matches_terms(product: Product, terms: List[str], include_category: bool = True) -> bool:
     if not terms:
         return True
-    blob = product.search_blob()
+    if include_category:
+        blob = product.search_blob()
+    else:
+        blob = normalize_text(" ".join([
+            product.sku,
+            product.title,
+            product.department,
+            product.brand,
+            product.promo,
+            " ".join(product.specs.values()),
+            product.url,
+        ]))
     return any(term and term in blob for term in terms)
 
 
@@ -1121,6 +1135,9 @@ def expand_query(query: str) -> List[str]:
         "אפור": ["אפור", "gray", "grey"],
         "brown": ["חום", "בז", "brown"],
         "חום": ["חום", "בז", "brown"],
+        "drill": ["drill", "מקדחה", "מקדחות", "מברגה", "מברגות"],
+        "מקדחה": ["מקדחה", "מקדחות", "מברגה", "מברגות", "drill"],
+        "מקדחות": ["מקדחה", "מקדחות", "מברגה", "מברגות", "drill"],
     }
     expanded = set(terms)
     for term in terms:

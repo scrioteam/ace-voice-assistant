@@ -219,9 +219,12 @@ def test_product_catalog_position_returns_live_sitemap_product(monkeypatch):
 
 def test_customer_panel_minimize_uses_visible_launcher():
     js = (server.STATIC_DIR / "customer.js").read_text(encoding="utf-8")
+    css = (server.STATIC_DIR / "app.css").read_text(encoding="utf-8")
     assert 'assistantPanel.classList.toggle("is-hidden", value === "closed")' in js
     assert 'assistantLauncher.hidden = value !== "closed"' in js
     assert 'value === "minimized" ? "פתח" : "ACE"' in js
+    assert "max-height: calc(100dvh - 36px);" in css
+    assert "overflow-y: auto;" in css
 
 
 def test_customer_voice_transcript_rejects_foreign_script_before_hebrew():
@@ -601,7 +604,7 @@ def test_autocomplete_urls_are_used_to_extend_live_results(monkeypatch):
 
     async def fake_fetch_text(url):
         sku = "1111111" if "alternate" not in url else "2222222"
-        title = "מוצר ראשון" if sku == "1111111" else "מוצר נוסף"
+        title = "מוצר בדיקה ראשון" if sku == "1111111" else "מוצר בדיקה נוסף"
         return f'''
         <ol class="products list items product-items">
           <li class="item product product-item">
@@ -647,7 +650,7 @@ def test_category_urls_are_used_to_extend_live_results(monkeypatch):
 
     async def fake_fetch_text(url):
         sku = "3333333" if "work-tools" in url else "1111111"
-        title = "מברגה מקטגוריה" if sku == "3333333" else "מוצר מחיפוש"
+        title = "כלי עבודה מברגה מקטגוריה" if sku == "3333333" else "כלי עבודה מחיפוש"
         return f'''
         <li class="item product product-item">
           <a href="https://www.ace.co.il/{sku}" class="product photo product-item-photo">
@@ -746,12 +749,45 @@ def test_products_from_urls_enriches_cards_with_render_info(monkeypatch):
 
     monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
     monkeypatch.setattr(live, "render_info_products", fake_render_info)
-    products = asyncio.run(live.products_from_urls(["https://www.ace.co.il/catalogsearch/result/?q=x"], "x", 3))
+    products = asyncio.run(live.products_from_urls(["https://www.ace.co.il/catalogsearch/result/?q=x"], "כותרת", 3))
     assert products[0].title == "כותרת render-info"
     assert products[0].price == 100
     assert products[0].regular_price == 120
     assert products[0].available is False
     assert products[0].image_url.endswith("new.jpg")
+
+
+def test_products_from_urls_filters_out_unmatched_broad_category_cards(monkeypatch):
+    live = server.AceLiveCatalog()
+
+    async def fake_fetch_text(url):
+        return '''
+        <ol class="products list items product-items">
+          <li class="item product product-item">
+            <a href="https://www.ace.co.il/DRILL1" class="product photo product-item-photo">
+              <img class="product-image-photo" src="https://www.ace.co.il/media/drill.jpg" />
+            </a>
+            <strong class="product name product-item-name">מברגה/מקדחה נטענת 12V</strong>
+            <span class="priceNum">199</span>
+          </li>
+          <li class="item product product-item">
+            <a href="https://www.ace.co.il/SAW1" class="product photo product-item-photo">
+              <img class="product-image-photo" src="https://www.ace.co.il/media/saw.jpg" />
+            </a>
+            <strong class="product name product-item-name">מסור אנכי 550W דגם WX463</strong>
+            <span class="priceNum">287.30</span>
+          </li>
+        </ol>
+        '''
+
+    async def passthrough_render_info(products):
+        return []
+
+    monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
+    monkeypatch.setattr(live, "render_info_products", passthrough_render_info)
+    products = asyncio.run(live.products_from_urls(["https://www.ace.co.il/tools"], "מקדחה", 5))
+    assert [product.sku for product in products] == ["DRILL1"]
+    assert "מסור" not in products[0].title
 
 
 def test_parse_sitemap_products_from_live_shape():
