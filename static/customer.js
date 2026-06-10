@@ -1,6 +1,7 @@
 (function () {
   const transcript = document.getElementById("transcript");
   const productStrip = document.getElementById("product-strip");
+  const aceFrame = document.getElementById("ace-frame");
   const chatForm = document.getElementById("chat-form");
   const chatInput = document.getElementById("chat-input");
   const connectionStatus = document.getElementById("connection-status");
@@ -94,8 +95,10 @@
       const card = document.createElement("a");
       card.className = "mini-product";
       card.href = product.url;
-      card.target = "_blank";
-      card.rel = "noopener noreferrer";
+      card.addEventListener("click", (event) => {
+        event.preventDefault();
+        navigateAceSite(product.url);
+      });
       card.innerHTML = `
         <img alt="" src="${product.image}">
         <div>
@@ -105,6 +108,30 @@
       `;
       productStrip.appendChild(card);
     });
+  }
+
+  function proxyAceUrl(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "/proxy/";
+    try {
+      const url = new URL(raw, "https://www.ace.co.il/");
+      if (url.hostname === window.location.hostname && url.pathname.startsWith("/proxy")) {
+        return url.pathname + url.search + url.hash;
+      }
+      if (/(^|\.)ace\.co\.il$/i.test(url.hostname)) {
+        return "/proxy" + url.pathname + url.search + url.hash;
+      }
+    } catch (error) {
+      return "/proxy/";
+    }
+    return "/proxy/";
+  }
+
+  function navigateAceSite(target) {
+    const next = proxyAceUrl(target);
+    aceFrame.src = next;
+    setStatus("עברתי באתר ACE", false);
+    return next;
   }
 
   function escapeHtml(value) {
@@ -186,6 +213,7 @@
       const data = await postJson("/api/demo/chat", { session_id: sessionId, text: value });
       addMessage("assistant", data.message);
       renderProducts(data.products);
+      if (data.navigate_url) navigateAceSite(data.navigate_url);
       if (shouldSpeak) speakAssistant(data.message);
       if (data.screen) {
         setStatus("מוצג: " + data.screen.location_label, false);
@@ -361,6 +389,18 @@
           source: data.source || "unknown",
           fallback_used: Boolean(data.fallback_used),
           live_only: true,
+        });
+        return;
+      }
+      if (name === "navigate_site") {
+        let target = args.url || args.path || "";
+        if (args.sku) target = "/" + encodeURIComponent(args.sku);
+        if (!target && args.query) target = "/catalogsearch/result/?q=" + encodeURIComponent(args.query);
+        const proxied_url = navigateAceSite(target || "/");
+        sendTool(id, {
+          ok: true,
+          proxied_url,
+          target,
         });
         return;
       }

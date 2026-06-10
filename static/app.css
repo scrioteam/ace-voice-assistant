@@ -254,6 +254,9 @@ h1, h2, h3, p { margin: 0; }
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
+  max-height: 210px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .mini-product {
@@ -919,13 +922,27 @@ h1, h2, h3, p { margin: 0; }
 
   .product-strip {
     grid-template-columns: 1fr;
+    max-height: 176px;
+  }
+
+  .mini-product {
+    display: grid;
+    grid-template-columns: 72px minmax(0, 1fr);
+    align-items: center;
   }
 
   .mini-product img {
-    max-height: 42vh;
+    width: 72px;
+    height: 72px;
+    aspect-ratio: auto;
+  }
+
+  .mini-product strong {
+    min-height: 0;
+    max-height: 38px;
   }
 
   .transcript {
-    max-height: 180px;
+    max-height: 150px;
   }
 }

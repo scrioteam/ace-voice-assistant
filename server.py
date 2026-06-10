@@ -800,6 +800,26 @@ def asks_for_more_products(text: str) -> bool:
     )
 
 
+def asks_to_navigate_site(text: str) -> bool:
+    lower = normalize_text(text)
+    return any(
+        term in lower
+        for term in [
+            "פתח",
+            "תפתח",
+            "נווט",
+            "לנווט",
+            "תנווט",
+            "קח אותי",
+            "תעביר",
+            "לעבור",
+            "דף מוצר",
+            "open",
+            "navigate",
+        ]
+    )
+
+
 def product_matches_terms(product: Product, terms: List[str], include_category: bool = True) -> bool:
     if not terms:
         return True
@@ -1483,6 +1503,7 @@ SYSTEM_PROMPT = """
 - ברירת המחדל היא ייעוץ מכירתי רגוע: הדגישי התאמה לצורך, מבצע, זמינות אונליין ושימושיות בלי לחץ ובלי ניסוחים אגרסיביים.
 - אל תתנדבי לדבר על חסרונות או מחיר גבוה. אם הלקוח מבקש במפורש, מסגרי את זה כהתאמה לצורך: "אם החלל קטן", "אם התקציב הוא השיקול המרכזי", "אם חשוב אירוח"; בלי לתייג מוצר כיקר.
 - אם מתאים להציג על מסך גדול, קראי ל-show_on_screen רק עם SKU-ים שחזרו מתוצאות live. אם מוקצה מסך, אמרי ללקוח איפה למצוא אותו.
+- אם הלקוח מבקש לנווט באתר, לפתוח דף מוצר, לפתוח תוצאות חיפוש או "קחי אותי לשם", השתמשי ב-navigate_site עם URL/sku/query מתאים. אל תגידי שניווט בוצע אם לא קראת לכלי.
 - מלאי הוא זמינות אונליין בלבד, לא מלאי סניף.
 - סגירה: הציעי בעדינות לפתוח את דף המוצר ב-ACE או להציג על המסך הגדול. אל תדחפי לרכישה אם הלקוח עדיין מתלבט.
 """.strip()
@@ -1540,6 +1561,21 @@ TOOLS = [
             "type": "object",
             "properties": {"sku": {"type": "string"}},
             "required": ["sku"],
+        },
+    },
+    {
+        "type": "function",
+        "name": "navigate_site",
+        "description": "ניווט אתר ACE המוטמע בדמו לדף מוצר, URL, נתיב או תוצאות חיפוש. השתמשי כאשר הלקוח מבקש לפתוח/לעבור/לנווט באתר.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "URL מלא של ACE, למשל מדף מוצר שהתקבל מכלי live"},
+                "path": {"type": "string", "description": "נתיב באתר ACE, למשל /catalogsearch/result/?q=מקדחה"},
+                "sku": {"type": "string", "description": "מק\"ט מוצר לפתיחה באתר"},
+                "query": {"type": "string", "description": "שאילתת חיפוש לפתיחת תוצאות באתר"},
+            },
+            "required": [],
         },
     },
     {
@@ -1918,6 +1954,15 @@ async def demo_chat(request: Request) -> Dict[str, Any]:
         return {
             "message": "בשמחה. כדי להתאים לך ספה שתסגור גם מראה וגם שימוש: מה התקציב בערך, והאם חשוב שהיא תיפתח למיטה?",
             "stage": memory["stage"],
+        }
+
+    if memory.get("stage") == "recommended" and asks_to_navigate_site(text) and memory.get("products"):
+        product = memory["products"][0]
+        return {
+            "message": f"פתחתי לך באתר ACE את דף המוצר {product['title']}.",
+            "stage": memory["stage"],
+            "products": memory["products"],
+            "navigate_url": product.get("url"),
         }
 
     if memory.get("stage") == "recommended" and asks_for_tradeoff and memory.get("products"):
