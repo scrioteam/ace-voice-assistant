@@ -230,6 +230,62 @@ def infer_department(data: Dict[str, Any]) -> str:
     return "general"
 
 
+QUERY_SYNONYMS: Dict[str, List[str]] = {
+    "sofa": ["ספה", "ספות", "סלון", "sofa", "couch"],
+    "couch": ["ספה", "ספות", "סלון", "sofa", "couch"],
+    "ספה": ["ספה", "ספות", "sofa", "couch", "סלון"],
+    "ספות": ["ספה", "ספות", "sofa", "couch", "סלון"],
+    "מיטה": ["מיטה", "נפתחת", "אירוח"],
+    "bed": ["מיטה", "נפתחת", "אירוח"],
+    "gray": ["אפור", "gray", "grey"],
+    "grey": ["אפור", "gray", "grey"],
+    "אפור": ["אפור", "gray", "grey"],
+    "brown": ["חום", "בז", "brown"],
+    "חום": ["חום", "בז", "brown"],
+    "drill": ["מקדחה", "מקדחות", "מברגה", "מברגות", "מקדח", "drill"],
+    "מקדחה": ["מקדחה", "מקדחות", "מברגה", "מברגות", "מקדח", "drill"],
+    "מקדחות": ["מקדחה", "מקדחות", "מברגה", "מברגות", "מקדח", "drill"],
+    "מברגה": ["מברגה", "מברגות", "מקדחה", "מקדחות", "drill"],
+    "paint": ["צבע לקיר", "צבעים", "ספריי צבע", "צבע", "paint"],
+    "צבע": ["צבע לקיר", "צבעים", "ספריי צבע", "צבע", "paint"],
+    "צבעים": ["צבע לקיר", "צבעים", "ספריי צבע", "צבע", "paint"],
+    "chair": ["כיסא", "כסא", "כיסאות", "כסאות", "כורסה", "כורסא", "chair"],
+    "כיסא": ["כיסא", "כסא", "כיסאות", "כסאות", "chair"],
+    "כסא": ["כיסא", "כסא", "כיסאות", "כסאות", "chair"],
+    "כיסאות": ["כיסא", "כסא", "כיסאות", "כסאות", "chair"],
+    "כסאות": ["כיסא", "כסא", "כיסאות", "כסאות", "chair"],
+    "gazebo": ["גזיבו", "גזיבו לגינה", "ביתן גינה", "סוכך", "ציליה", "צליה", "פרגולה", "gazebo"],
+    "גזיבו": ["גזיבו", "גזיבו לגינה", "ביתן גינה", "סוכך", "ציליה", "צליה", "פרגולה", "gazebo"],
+    "פרגולה": ["פרגולה", "גזיבו", "סוכך", "ציליה", "צליה"],
+}
+
+
+PRODUCT_TYPE_TERMS: Dict[str, List[str]] = {
+    "drill": ["מקדחה", "מקדחות", "מברגה", "מברגות", "מקדח", "פטישון", "drill"],
+    "paint": [
+        "paint",
+        "צבעי",
+        "צבעים",
+        "ספריי צבע",
+        "ספרי צבע",
+        "צבע לקיר",
+        "צבע אקרילי",
+        "צבע שמן",
+        "צבע לעץ",
+        "צבע מתכת",
+        "צביעה",
+        "טמבור",
+        "נירלט",
+        "פוליאור",
+        "אוניאור",
+        "סופרקריל",
+    ],
+    "sofa": ["ספה", "ספות", "סלון פינתי", "סלון מודולרי", "sofa", "couch"],
+    "chair": ["כיסא", "כסא", "כיסאות", "כסאות", "כורסה", "כורסא", "chair"],
+    "gazebo": ["גזיבו", "gazebo", "ביתן גינה", "ביתן", "סוכך", "ציליה", "צליה", "פרגולה"],
+}
+
+
 class Catalog:
     def __init__(self) -> None:
         self.products: List[Product] = []
@@ -333,17 +389,21 @@ class AceLiveCatalog:
         page_number = normalized_page(page)
         result_limit = max(1, min(limit, 30))
         try:
-            if page_number == 1 and is_sku_like(query):
+            if page_number == 1 and is_sku_like(query) and not product_type_group_for_query(query):
                 product = await self.get(query)
                 if product:
                     return [product]
-            urls = [paged_url(url, page_number) for url in await self.category_result_urls(query, category)]
-            urls.append(paged_url(f"{ACE_ORIGIN}/catalogsearch/result/?q={urllib.parse.quote(query)}", page_number))
-            urls.extend(paged_url(url, page_number) for url in await self.autocomplete_result_urls(query))
+            urls: List[str] = []
+            for search_query in search_queries_for_query(query, category):
+                urls.extend(paged_url(url, page_number) for url in await self.category_result_urls(search_query, category))
+                urls.append(paged_url(f"{ACE_ORIGIN}/catalogsearch/result/?q={urllib.parse.quote(search_query)}", page_number))
+                urls.extend(paged_url(url, page_number) for url in await self.autocomplete_result_urls(search_query))
             products = await self.products_from_urls(urls, query, result_limit)
             if len(dedupe_products(products)) < result_limit:
                 products.extend(await self.sitemap_products_for_query(query, result_limit, page=page_number))
             filtered = filter_products_by_price(dedupe_products(products), min_price, max_price)
+            if product_type_group_for_query(query):
+                filtered = [product for product in filtered if product_type_matches_query(product, query)]
             return rank_products_for_query(filtered, query)[:result_limit]
         except (httpx.HTTPError, ValueError) as exc:
             self.last_error = str(exc)
@@ -480,8 +540,11 @@ class AceLiveCatalog:
             if score > 0:
                 scored.append((score, product))
         scored.sort(key=lambda item: (-item[0], item[1].title))
-        candidates = [product for _, product in scored[start : start + result_limit]]
-        return await self.enrich_sitemap_products(candidates)
+        candidates = [product for _, product in scored[start : start + result_limit * 4]]
+        enriched = await self.enrich_sitemap_products(candidates)
+        if product_type_group_for_query(query):
+            enriched = [product for product in enriched if product_type_matches_query(product, query)]
+        return enriched[:result_limit]
 
     async def browse_sitemap_products(self, page: int = 1, limit: int = 12, query: str = "") -> List[Product]:
         result_limit = max(1, min(limit, 30))
@@ -720,13 +783,15 @@ class AceLiveCatalog:
     async def products_from_urls(self, urls: List[str], query: str, limit: int) -> List[Product]:
         products: List[Product] = []
         seen: set[str] = set()
-        terms = expand_query(query)
         for url in urls:
             if len(products) >= limit:
                 break
             html_text = await self.fetch_text(url)
             for product in parse_product_cards(html_text, category=query):
-                if terms and not product_matches_terms(product, terms, include_category=False):
+                if product_type_group_for_query(query):
+                    if not product_type_matches_query(product, query):
+                        continue
+                elif not product_matches_terms(product, expand_query(query), include_category=False):
                     continue
                 key = sku_key(product.sku)
                 if key in seen:
@@ -735,7 +800,8 @@ class AceLiveCatalog:
                 products.append(product)
                 if len(products) >= limit:
                     break
-        return await self.enrich_products_with_render_info(products)
+        enriched = await self.enrich_products_with_render_info(products)
+        return [product for product in enriched if product_type_matches_query(product, query)]
 
 
 def filter_products_by_price(
@@ -1143,28 +1209,59 @@ def parse_product_page(html_text: str, sku: str) -> Product:
 def expand_query(query: str) -> List[str]:
     q = normalize_text(query)
     terms = [part for part in re.split(r"[\s,.;:!?]+", q) if part]
-    synonyms = {
-        "sofa": ["sofa", "couch", "ספה", "ספות", "סלון"],
-        "couch": ["sofa", "couch", "ספה", "ספות", "סלון"],
-        "ספה": ["ספה", "ספות", "sofa", "couch", "סלון"],
-        "ספות": ["ספה", "ספות", "sofa", "couch", "סלון"],
-        "מיטה": ["מיטה", "נפתחת", "אירוח"],
-        "bed": ["מיטה", "נפתחת", "אירוח"],
-        "gray": ["אפור", "gray", "grey"],
-        "grey": ["אפור", "gray", "grey"],
-        "אפור": ["אפור", "gray", "grey"],
-        "brown": ["חום", "בז", "brown"],
-        "חום": ["חום", "בז", "brown"],
-        "drill": ["drill", "מקדחה", "מקדחות", "מברגה", "מברגות"],
-        "מקדחה": ["מקדחה", "מקדחות", "מברגה", "מברגות", "drill"],
-        "מקדחות": ["מקדחה", "מקדחות", "מברגה", "מברגות", "drill"],
-    }
     expanded = set(terms)
     for term in terms:
-        expanded.update(synonyms.get(term, []))
+        expanded.update(QUERY_SYNONYMS.get(term, []))
     if any(t in q for t in ["סלון", "רביצה", "פינת"]):
         expanded.update(["ספה", "ספות"])
     return [normalize_text(term) for term in expanded if normalize_text(term)]
+
+
+def search_queries_for_query(query: str, category: str = "") -> List[str]:
+    raw_values = [str(query or "").strip(), str(category or "").strip()]
+    raw_values = [value for value in raw_values if value]
+    normalized_terms = [
+        part
+        for value in raw_values
+        for part in re.split(r"[\s,.;:!?]+", normalize_text(value))
+        if part
+    ]
+    aliases: List[str] = []
+    for term in normalized_terms:
+        aliases.extend(QUERY_SYNONYMS.get(term, []))
+
+    values: List[str] = []
+    ascii_query = bool(raw_values and re.fullmatch(r"[\sA-Za-z0-9_\-]+", raw_values[0]))
+    ordered = aliases + raw_values if ascii_query and aliases else raw_values + aliases
+    for value in ordered:
+        normalized = normalize_text(value)
+        if normalized and normalized not in [normalize_text(existing) for existing in values]:
+            values.append(value)
+        if len(values) >= 8:
+            break
+    return values
+
+
+def product_type_group_for_query(query: str) -> str:
+    terms = set(expand_query(query))
+    for group, group_terms in PRODUCT_TYPE_TERMS.items():
+        if terms.intersection(normalize_text(term) for term in group_terms):
+            return group
+    return ""
+
+
+def product_type_matches_query(product: Product, query: str) -> bool:
+    group = product_type_group_for_query(query)
+    if not group:
+        return product_matches_terms(product, expand_query(query), include_category=False)
+    text = normalize_text(" ".join([
+        product.title,
+        product.department,
+        product.brand,
+        product.url,
+        " ".join(product.specs.values()),
+    ]))
+    return any(normalize_text(term) in text for term in PRODUCT_TYPE_TERMS[group])
 
 
 def score_product(product: Product, terms: List[str]) -> int:
@@ -1496,6 +1593,7 @@ SYSTEM_PROMPT = """
 - כל טקסט שאת מציגה או מתמללת ללקוח חייב להיות בעברית תקנית או מספרים/שמות מוצר כפי שהם באתר. אם תמלול קולי נראה כמו ערבית, רוסית או שפה אחרת בגלל זיהוי שגוי, אל תציגי אותו כפי שהוא; התייחסי אליו כבקשה קולית בעברית ובקשי הבהרה קצרה.
 - כשלקוח מבקש מוצר, שאלי עד שתי שאלות קנייה חסרות: תקציב, מידה, שימוש, צבע, דחיפות או צורך במשלוח.
 - אחרי שיש מספיק מידע, הציגי 2-3 מוצרים אמיתיים מתוצאות live של כלי search_products או get_product_details בלבד. לעולם אל תמציאי מוצר, מחיר, מלאי או קישור.
+- כשאת מציעה מוצר מוביל או אומרת "אני פותחת/מראה לך", ודאי שהאתר המוטמע עובר אליו: השתמשי ב-navigate_site עם URL/sku/query מתאים או הסתמכי על תוצאת כלי מוצר שהניווט שלה הצליח.
 - שמרי את החיפוש האחרון: query/category/filters/page. כשהלקוח מבקש "עוד", "אפשרויות נוספות" או "הבא", קראי שוב ל-search_products עם אותם פילטרים ו-page גדול ב-1 במקום להתחיל חיפוש חדש.
 - אם חיפוש לפי טקסט לא מספיק או צריך להראות רוחב קטלוג, השתמשי ב-browse_products כדי לדפדף באינדקס המוצרים החי של ACE לפי עמודים. גם כאן הציגי רק מוצרים שחזרו מהכלי.
 - כאשר צריך להוכיח גישה למוצר מסוים באינדקס הרחב, אפשר להשתמש ב-get_catalog_position עם מספר מיקום מהסייטמאפ החי של ACE.
@@ -2259,9 +2357,20 @@ def inject_proxy_script(source: str) -> str:
   function localize(url){
     try {
       var u = new URL(url, "https://www.ace.co.il/");
+      if (u.hostname === window.location.hostname && u.pathname.indexOf("/proxy") === 0) return u.pathname + u.search + u.hash;
       if (/(^|\\.)ace\\.co\\.il$/i.test(u.hostname)) return "/proxy" + u.pathname + u.search + u.hash;
     } catch(e) {}
     return url;
+  }
+  function navigateFrame(url){
+    if (!url || url.indexOf("/proxy") !== 0) return false;
+    try {
+      window.parent.postMessage({ type: "ace-proxy-navigate", url: url }, "*");
+      return true;
+    } catch(e) {
+      window.location.href = url;
+      return true;
+    }
   }
   document.addEventListener("click", function(event){
     var link = event.target.closest && event.target.closest("a[href]");
@@ -2269,8 +2378,25 @@ def inject_proxy_script(source: str) -> str:
     var next = localize(link.href);
     if (next !== link.href) {
       event.preventDefault();
-      window.location.href = next;
+      link.setAttribute("target", "_self");
+      navigateFrame(next);
     }
+  }, true);
+  document.addEventListener("submit", function(event){
+    var form = event.target;
+    if (!form || !form.action) return;
+    var next = localize(form.action);
+    if (next === form.action || String(form.method || "get").toLowerCase() !== "get") {
+      form.setAttribute("target", "_self");
+      return;
+    }
+    event.preventDefault();
+    try {
+      var params = new URLSearchParams(new FormData(form));
+      var separator = next.indexOf("?") === -1 ? "?" : "&";
+      if (params.toString()) next = next + separator + params.toString();
+    } catch(e) {}
+    navigateFrame(next);
   }, true);
 })();
 </script>

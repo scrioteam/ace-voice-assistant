@@ -31,6 +31,12 @@
   let recordingTimer = null;
   let realtimeFailedOnce = false;
   const genericVoiceRequestLabel = "בקשה קולית התקבלה בעברית";
+  const voiceStateLabels = {
+    idle: "התחלת יועץ קולי",
+    connecting: "היועץ הקולי מתחבר",
+    listening: "יועץ קולי פעיל ומאזין",
+    speaking: "יועץ קולי מדבר",
+  };
 
   function money(value) {
     const amount = Number(value || 0);
@@ -44,6 +50,7 @@
   function setStatus(text, busy) {
     connectionStatus.textContent = text;
     connectionStatus.classList.toggle("busy", Boolean(busy));
+    assistantPanel.dataset.busy = busy ? "true" : "false";
   }
 
   function addMessage(role, text) {
@@ -110,9 +117,16 @@
     });
   }
 
+  function firstProductUrl(products) {
+    const list = Array.isArray(products) ? products : [];
+    const product = list.find((item) => item && item.url);
+    return product ? product.url : "";
+  }
+
   function proxyAceUrl(value) {
     const raw = String(value || "").trim();
     if (!raw) return "/proxy/";
+    if (raw === "/proxy" || raw.startsWith("/proxy/")) return raw;
     try {
       const url = new URL(raw, "https://www.ace.co.il/");
       if (url.hostname === window.location.hostname && url.pathname.startsWith("/proxy")) {
@@ -129,10 +143,33 @@
 
   function navigateAceSite(target) {
     const next = proxyAceUrl(target);
+    if (aceFrame.dataset.currentSrc === next) {
+      setStatus("אתר ACE כבר מוצג", false);
+      return next;
+    }
+    aceFrame.dataset.currentSrc = next;
     aceFrame.src = next;
     setStatus("עברתי באתר ACE", false);
     return next;
   }
+
+  function navigateToOfferedProduct(products) {
+    const url = firstProductUrl(products);
+    if (!url) return "";
+    return navigateAceSite(url);
+  }
+
+  function handleAceFrameMessage(event) {
+    if (event.source !== aceFrame.contentWindow) return;
+    const data = event.data || {};
+    if (!data || data.type !== "ace-proxy-navigate") return;
+    const next = proxyAceUrl(data.url);
+    if (!next.startsWith("/proxy")) return;
+    navigateAceSite(next);
+  }
+
+  window.addEventListener("message", handleAceFrameMessage);
+  aceFrame.dataset.currentSrc = aceFrame.getAttribute("src") || "/proxy/";
 
   function escapeHtml(value) {
     return String(value || "").replace(/[&<>"']/g, (char) => ({
@@ -214,6 +251,7 @@
       addMessage("assistant", data.message);
       renderProducts(data.products);
       if (data.navigate_url) navigateAceSite(data.navigate_url);
+      else navigateToOfferedProduct(data.products);
       if (shouldSpeak) speakAssistant(data.message);
       if (data.screen) {
         setStatus("מוצג: " + data.screen.location_label, false);
@@ -238,21 +276,20 @@
   });
 
   function setAssistantPanelState(state) {
-    const value = state === "closed" || state === "minimized" ? state : "open";
-    assistantPanel.classList.toggle("is-minimized", value === "minimized");
-    assistantPanel.classList.toggle("is-hidden", value === "closed");
-    assistantPanel.setAttribute("aria-expanded", value === "open" ? "true" : "false");
+    const value = "open";
+    assistantPanel.classList.remove("is-minimized", "is-hidden");
+    assistantPanel.setAttribute("aria-expanded", "true");
     assistantPanel.dataset.panelState = value;
-    assistantLauncher.hidden = value !== "closed";
+    assistantLauncher.hidden = true;
     assistantLauncher.setAttribute(
       "aria-label",
-      value === "minimized" ? "פתיחת יועץ המכירות הממוזער" : "פתיחת יועץ המכירות"
+      "פתיחת יועץ קולי"
     );
     const launcherText = assistantLauncher.querySelector("span");
-    if (launcherText) launcherText.textContent = value === "minimized" ? "פתח" : "ACE";
-    assistantMinimize.textContent = value === "minimized" ? "פתח" : "מזער";
-    assistantMinimize.setAttribute("aria-label", value === "minimized" ? "פתיחת היועץ" : "מזעור היועץ");
-    localStorage.setItem("ace_assistant_panel_state", value);
+    if (launcherText) launcherText.textContent = "ACE";
+    assistantMinimize.textContent = "קול";
+    assistantMinimize.setAttribute("aria-label", "מצב יועץ קולי");
+    localStorage.setItem("ace_assistant_panel_state", "open");
   }
 
   assistantPanel.querySelector(".panel-header").addEventListener("click", (event) => {
@@ -269,14 +306,25 @@
   assistantClose.addEventListener("click", () => {
     stopVoice();
     if (recording) stopPushToTalkRecording();
-    setAssistantPanelState("closed");
+    setAssistantPanelState("open");
   });
 
-  assistantLauncher.addEventListener("click", () => setAssistantPanelState("open"));
+  assistantLauncher.addEventListener("click", () => {
+    setAssistantPanelState("open");
+    micButton.click();
+  });
 
   function setMicState(state) {
-    micButton.classList.toggle("listening", state === "listening");
-    micButton.classList.toggle("speaking", state === "speaking");
+    const value = voiceStateLabels[state] ? state : "idle";
+    [micButton, assistantPanel, assistantLauncher].forEach((node) => {
+      node.classList.toggle("listening", value === "listening");
+      node.classList.toggle("speaking", value === "speaking");
+      node.classList.toggle("connecting", value === "connecting");
+      node.dataset.voiceState = value;
+    });
+    assistantPanel.dataset.voiceActive = value === "idle" ? "false" : "true";
+    micButton.setAttribute("aria-label", voiceStateLabels[value]);
+    assistantPanel.setAttribute("aria-label", voiceStateLabels[value]);
   }
 
   function sendTool(callId, output) {
@@ -310,6 +358,7 @@
         const data = await fetch("/api/products/search?" + params.toString()).then((r) => r.json());
         const products = Array.isArray(data) ? data : (data.products || []);
         renderProducts(products);
+        const proxied_url = navigateToOfferedProduct(products);
         sendTool(id, {
           products,
           found: products.length,
@@ -317,6 +366,7 @@
           fallback_used: Boolean(data.fallback_used),
           live_only: true,
           page: data.page || (args.page || 1),
+          proxied_url,
         });
         return;
       }
@@ -329,6 +379,7 @@
         const data = await fetch("/api/products/browse?" + params.toString()).then((r) => r.json());
         const products = Array.isArray(data) ? data : (data.products || []);
         renderProducts(products);
+        const proxied_url = navigateToOfferedProduct(products);
         sendTool(id, {
           products,
           found: products.length,
@@ -337,6 +388,7 @@
           live_only: true,
           page: data.page || (args.page || 1),
           total: data.total,
+          proxied_url,
         });
         return;
       }
@@ -357,6 +409,7 @@
         }
         const product = data.product || data;
         renderProducts([product]);
+        const proxied_url = navigateToOfferedProduct([product]);
         sendTool(id, {
           product,
           found: true,
@@ -365,6 +418,7 @@
           live_only: true,
           position: data.position || position,
           total: data.total,
+          proxied_url,
         });
         return;
       }
@@ -384,11 +438,13 @@
         }
         const product = data.product || data;
         renderProducts([product]);
+        const proxied_url = navigateToOfferedProduct([product]);
         sendTool(id, {
           ...product,
           source: data.source || "unknown",
           fallback_used: Boolean(data.fallback_used),
           live_only: true,
+          proxied_url,
         });
         return;
       }
@@ -420,8 +476,9 @@
           live_only: true,
         });
         renderProducts(result.products);
+        const proxied_url = navigateToOfferedProduct(result.products);
         setStatus("מוצג: " + result.screen.location_label, false);
-        sendTool(id, result);
+        sendTool(id, { ...result, proxied_url });
         return;
       }
       if (name === "answer_store_policy") {
@@ -466,7 +523,7 @@
 
   async function startVoice() {
     voiceStatus.textContent = "מתחבר ל-GPT Realtime";
-    setMicState("listening");
+    setMicState("connecting");
     try {
       pc = new RTCPeerConnection({ iceServers: [{ urls: "stun:stun.l.google.com:19302" }] });
       remoteAudio = document.createElement("audio");
@@ -493,9 +550,17 @@
           item: {
             type: "message",
             role: "user",
-            content: [{ type: "input_text", text: "session_id לשימוש בכלי show_on_screen: " + sessionId }],
+            content: [{
+              type: "input_text",
+              text: [
+                "session_id לשימוש בכלי show_on_screen: " + sessionId,
+                "הלקוח לחץ על כפתור היועץ הקולי באתר ACE.",
+                "פתחי שיחת ייעוץ קולית קצרה בעברית, הזמיני אותו לבקש מוצר, והציעי לפתוח מוצר באתר כשיש התאמה.",
+              ].join("\n"),
+            }],
           },
         }));
+        dc.send(JSON.stringify({ type: "response.create" }));
       });
       dc.addEventListener("message", (event) => processRealtimeEvent(JSON.parse(event.data)));
       const offer = await pc.createOffer();
@@ -824,7 +889,8 @@
   }
   window.__aceVoiceMode = currentVoiceMode();
   document.documentElement.dataset.aceVoiceMode = window.__aceVoiceMode;
-  setAssistantPanelState(localStorage.getItem("ace_assistant_panel_state") || "open");
+  setAssistantPanelState("open");
+  setMicState("idle");
   voiceStatus.textContent = voiceStatusLabel();
   addMessage("assistant", "שלום, אני יועץ המכירות של ACE. אפשר להתחיל בתרחיש הספה או לשאול על מוצר.");
 })();

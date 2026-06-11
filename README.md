@@ -22,9 +22,9 @@ Open:
 
 1. Open `/demo`, then open the customer and screen pages.
 2. Reset the demo. By default, only the screen near plumbing is available.
-3. In the customer panel, click `לקוח מחפש ספה`.
-4. Click `תקציב וצורך`.
-5. The assistant recommends sofa options and pushes the comparison to the available screen.
+3. In the customer page, click the floating ACE voice button.
+4. Ask for a product in Hebrew, for example a sofa that opens into a bed under 3000 NIS.
+5. The assistant recommends products, navigates the embedded ACE site without reloading the demo page, and can push the comparison to the available screen.
 
 ## Data
 

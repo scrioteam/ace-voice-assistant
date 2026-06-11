@@ -117,6 +117,7 @@ def test_realtime_product_tools_are_described_as_live_only():
 
 def test_system_prompt_requires_live_catalog_products():
     assert "תוצאות live של כלי search_products או get_product_details בלבד" in server.SYSTEM_PROMPT
+    assert "כשאת מציעה מוצר מוביל" in server.SYSTEM_PROMPT
     assert "page גדול ב-1" in server.SYSTEM_PROMPT
     assert "navigate_site" in server.SYSTEM_PROMPT
     assert "fallback_used=true" in server.SYSTEM_PROMPT
@@ -137,10 +138,43 @@ def test_customer_realtime_product_calls_request_live_only_catalog():
     assert 'name === "navigate_site"' in js
     assert "aceFrame.src = next" in js
     assert "proxyAceUrl" in js
+    assert 'if (raw === "/proxy" || raw.startsWith("/proxy/")) return raw;' in js
+    assert "aceFrame.dataset.currentSrc === next" in js
+    assert 'data.type !== "ace-proxy-navigate"' in js
+    assert 'window.addEventListener("message", handleAceFrameMessage);' in js
     assert "if (data.navigate_url) navigateAceSite(data.navigate_url);" in js
+    assert "else navigateToOfferedProduct(data.products);" in js
+    assert "const proxied_url = navigateToOfferedProduct(products);" in js
+    assert "const proxied_url = navigateToOfferedProduct([product]);" in js
     assert "navigateAceSite(product.url);" in js
     assert '?include_meta=true&live_only=true' in js
     assert "fallback_used" in js
+
+
+def test_customer_page_uses_voice_only_fab_contract():
+    html = (server.TEMPLATES_DIR / "customer.html").read_text(encoding="utf-8")
+    css = (server.STATIC_DIR / "app.css").read_text(encoding="utf-8")
+    js = (server.STATIC_DIR / "customer.js").read_text(encoding="utf-8")
+
+    assert 'class="assistant-panel voice-only"' in html
+    assert 'sandbox="allow-downloads allow-forms allow-popups allow-scripts"' in html
+    assert "voice-only-2" in html
+    assert ".assistant-panel.voice-only .panel-header" in css
+    assert ".assistant-panel.voice-only .mic-button" in css
+    assert "assistantLauncher.hidden = true" in js
+    assert 'setAssistantPanelState("open")' in js
+    assert "הלקוח לחץ על כפתור היועץ הקולי באתר ACE" in js
+    assert 'dc.send(JSON.stringify({ type: "response.create" }));' in js
+
+
+def test_proxy_frame_navigation_is_parent_owned_without_top_refresh():
+    injected = server.inject_proxy_script("<html><head></head><body></body></html>")
+    assert 'postMessage({ type: "ace-proxy-navigate", url: url }, "*")' in injected
+    assert 'link.setAttribute("target", "_self")' in injected
+    assert 'form.setAttribute("target", "_self")' in injected
+    assert "window.top" not in injected
+    assert "top.location" not in injected
+    assert "parent.location" not in injected
 
 
 def test_paged_url_adds_or_replaces_page_param():
@@ -226,14 +260,15 @@ def test_product_catalog_position_returns_live_sitemap_product(monkeypatch):
     assert data["product"]["sku"] == "POS-5"
 
 
-def test_customer_panel_minimize_uses_visible_launcher():
+def test_customer_voice_only_fab_replaces_panel_minimize():
     js = (server.STATIC_DIR / "customer.js").read_text(encoding="utf-8")
     css = (server.STATIC_DIR / "app.css").read_text(encoding="utf-8")
-    assert 'assistantPanel.classList.toggle("is-hidden", value === "closed")' in js
-    assert 'assistantLauncher.hidden = value !== "closed"' in js
-    assert 'value === "minimized" ? "פתח" : "ACE"' in js
-    assert "max-height: calc(100dvh - 36px);" in css
-    assert "overflow-y: auto;" in css
+    assert 'assistantPanel.classList.remove("is-minimized", "is-hidden")' in js
+    assert "assistantLauncher.hidden = true" in js
+    assert 'localStorage.setItem("ace_assistant_panel_state", "open")' in js
+    assert "top: 50%;" in css
+    assert ".assistant-panel.voice-only .voice-status" in css
+    assert ".assistant-panel.voice-only .mic-button.listening" in css
     assert "grid-template-columns: 72px minmax(0, 1fr);" in css
     assert "max-height: 176px;" in css
 
@@ -573,11 +608,9 @@ def test_live_search_requests_requested_page_for_search_urls(monkeypatch):
     monkeypatch.setattr(live, "sitemap_products_for_query", no_sitemap_products)
     products = asyncio.run(live.search("ספה", limit=3, page=2))
     assert products[0].sku == "2222222"
-    assert seen_urls == [
-        "https://www.ace.co.il/furniture/living-room-furniture/living-room-sofas?p=2",
-        "https://www.ace.co.il/catalogsearch/result/?q=%D7%A1%D7%A4%D7%94&p=2",
-        "https://www.ace.co.il/catalogsearch/result/?q=alternate&p=2",
-    ]
+    assert "https://www.ace.co.il/catalogsearch/result/?q=%D7%A1%D7%A4%D7%94&p=2" in seen_urls
+    assert "https://www.ace.co.il/catalogsearch/result/?q=alternate&p=2" in seen_urls
+    assert all("p=2" in url for url in seen_urls)
 
 
 def test_live_search_uses_sitemap_only_to_fill_page_gaps(monkeypatch):
@@ -680,6 +713,64 @@ def test_category_urls_are_used_to_extend_live_results(monkeypatch):
     monkeypatch.setattr(live, "enrich_products_with_render_info", passthrough_enrichment)
     products = asyncio.run(live.search("כלי עבודה", limit=2))
     assert {product.sku for product in products} == {"1111111", "3333333"}
+
+
+def test_benchmark_query_aliases_cover_expected_categories():
+    assert server.search_queries_for_query("gazebo")[0] == "גזיבו"
+    assert "ביתן גינה" in server.search_queries_for_query("gazebo")
+    assert server.search_queries_for_query("paint")[0] == "צבע לקיר"
+    assert "כיסא" in server.search_queries_for_query("chair")
+    assert "מקדחה" in server.search_queries_for_query("drill")
+
+
+def test_product_type_gate_rejects_category_mismatches():
+    paint = server.Product(sku="P1", title="ספרי צבע לבן מט", url="https://www.ace.co.il/P1")
+    colored_sofa = server.Product(sku="S1", title="סלון פינתי מודולרי צבע בז", url="https://www.ace.co.il/S1")
+    chair = server.Product(sku="C1", title="כיסא תלמיד ארגונומי", url="https://www.ace.co.il/C1")
+    unrelated = server.Product(sku="U1", title="שער בטיחות למפתח", url="https://www.ace.co.il/U1")
+    gazebo = server.Product(sku="G1", title="גזיבו לגינה 3x3", url="https://www.ace.co.il/G1")
+
+    assert server.product_type_matches_query(paint, "paint")
+    assert not server.product_type_matches_query(colored_sofa, "paint")
+    assert server.product_type_matches_query(chair, "chair")
+    assert not server.product_type_matches_query(unrelated, "chair")
+    assert server.product_type_matches_query(gazebo, "gazebo")
+    assert not server.product_type_matches_query(unrelated, "gazebo")
+
+
+def test_live_search_uses_benchmark_aliases_before_accepting_results(monkeypatch):
+    live = server.AceLiveCatalog()
+    live.category_index = []
+    live.category_index_loaded_at = server.now()
+    fetched_urls = []
+
+    async def fake_autocomplete(query):
+        return []
+
+    async def fake_fetch_text(url):
+        fetched_urls.append(url)
+        decoded = server.urllib.parse.unquote(url)
+        title = "גזיבו לגינה 3x3" if "גזיבו" in decoded else "שער בטיחות למפתח"
+        sku = "GAZEBO1" if "גזיבו" in decoded else "WRONG1"
+        return f'''
+        <li class="item product product-item">
+          <a href="https://www.ace.co.il/{sku}" class="product photo product-item-photo">
+            <img class="product-image-photo" src="https://www.ace.co.il/media/{sku}.jpg" />
+          </a>
+          <strong class="product name product-item-name">{title}</strong>
+          <span class="priceNum">99</span>
+        </li>
+        '''
+
+    async def passthrough_enrichment(products):
+        return products
+
+    monkeypatch.setattr(live, "autocomplete_result_urls", fake_autocomplete)
+    monkeypatch.setattr(live, "fetch_text", fake_fetch_text)
+    monkeypatch.setattr(live, "enrich_products_with_render_info", passthrough_enrichment)
+    products = asyncio.run(live.search("gazebo", limit=1))
+    assert [product.sku for product in products] == ["GAZEBO1"]
+    assert any("%D7%92%D7%96%D7%99%D7%91%D7%95" in url for url in fetched_urls)
 
 
 def test_product_from_render_info_maps_ace_structured_payload():

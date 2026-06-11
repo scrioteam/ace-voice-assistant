@@ -42,72 +42,113 @@ button { cursor: pointer; }
 .assistant-panel {
   position: fixed;
   inset-inline-end: 18px;
-  bottom: 18px;
+  top: 50%;
   z-index: 50;
-  width: min(390px, calc(100vw - 28px));
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  gap: 10px;
-  padding: 14px;
-  max-height: calc(100dvh - 36px);
-  border: 1px solid rgba(17, 24, 39, .12);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, .96);
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(12px);
-}
-
-.assistant-panel.is-minimized {
-  width: 64px;
-  min-height: 64px;
-  overflow: hidden;
+  width: 72px;
+  height: 72px;
+  transform: translateY(-50%);
+  display: block;
   padding: 0;
+  border: 0;
   border-radius: 50%;
-  place-items: center;
-  background: var(--ace-red);
-  color: #fff;
+  background: transparent;
+  box-shadow: none;
 }
 
-.assistant-panel.is-minimized .assistant-content {
+.assistant-panel.voice-only .panel-header,
+.assistant-panel.voice-only .product-strip,
+.assistant-panel.voice-only .quick-actions,
+.assistant-panel.voice-only .chat-form {
   display: none;
 }
 
-.assistant-panel.is-minimized .status-pill {
-  display: none;
-}
-
-.assistant-panel.is-minimized .panel-header {
-  width: 64px;
-  height: 64px;
-  justify-content: center;
-  gap: 0;
-  cursor: pointer;
-}
-
-.assistant-panel.is-minimized .panel-header h1 {
-  width: 100%;
-  height: 100%;
-  display: grid;
-  place-items: center;
-  margin: 0;
-  font-size: 0;
+.assistant-panel.voice-only .transcript,
+.assistant-panel.voice-only .voice-status {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  border: 0;
   white-space: nowrap;
 }
 
-.assistant-panel.is-minimized .panel-header h1::before {
-  content: "ACE";
-  font-size: 15px;
-  line-height: 1;
-  font-weight: 900;
+.assistant-panel.voice-only .assistant-content,
+.assistant-panel.voice-only .voice-row {
+  display: block;
+  padding: 0;
+  width: 100%;
+  height: 100%;
 }
 
-.assistant-panel.is-minimized .panel-kicker,
-.assistant-panel.is-minimized .panel-header-actions {
-  display: none;
+.assistant-panel.voice-only .mic-button {
+  --voice-ring: rgba(8, 116, 67, .32);
+  position: relative;
+  width: 72px;
+  height: 72px;
+  flex: 0 0 72px;
+  border: 2px solid #fff;
+  background: var(--ace-red);
+  box-shadow: var(--shadow), 0 0 0 1px rgba(17, 24, 39, .12);
 }
 
-.assistant-panel.is-minimized:hover {
+.assistant-panel.voice-only .mic-button:hover {
   background: var(--ace-red-dark);
+}
+
+.assistant-panel.voice-only .mic-button::after {
+  content: "";
+  position: absolute;
+  top: 9px;
+  inset-inline-end: 9px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #9ca3af;
+}
+
+.assistant-panel.voice-only .mic-button.connecting {
+  --voice-ring: rgba(180, 83, 9, .3);
+  background: var(--warn);
+}
+
+.assistant-panel.voice-only .mic-button.listening {
+  --voice-ring: rgba(8, 116, 67, .32);
+  background: var(--good);
+  animation: voicePulse 1.7s ease-out infinite;
+}
+
+.assistant-panel.voice-only .mic-button.speaking {
+  --voice-ring: rgba(215, 25, 32, .3);
+  background: var(--ace-red);
+  animation: voicePulse 1.15s ease-out infinite;
+}
+
+.assistant-panel.voice-only .mic-button.connecting::after {
+  background: var(--warn);
+}
+
+.assistant-panel.voice-only .mic-button.listening::after {
+  background: #16a34a;
+}
+
+.assistant-panel.voice-only .mic-button.speaking::after {
+  background: var(--ace-red);
+}
+
+.assistant-panel.voice-only .mic-button svg {
+  width: 28px;
+  height: 28px;
+}
+
+@keyframes voicePulse {
+  0% { box-shadow: var(--shadow), 0 0 0 0 var(--voice-ring); }
+  70% { box-shadow: var(--shadow), 0 0 0 14px rgba(8, 116, 67, 0); }
+  100% { box-shadow: var(--shadow), 0 0 0 0 rgba(8, 116, 67, 0); }
 }
 
 .assistant-panel.is-hidden {
@@ -897,21 +938,20 @@ h1, h2, h3, p { margin: 0; }
   }
 
   .assistant-panel {
-    inset-inline: 10px;
-    bottom: 10px;
-    width: auto;
-    max-height: calc(100dvh - 20px);
-  }
-
-  .assistant-panel.is-minimized {
     inset-inline-start: auto;
-    width: 62px;
-    min-height: 62px;
+    inset-inline-end: 14px;
+    top: auto;
+    bottom: 16px;
+    width: 64px;
+    height: 64px;
+    max-height: none;
+    transform: none;
   }
 
-  .assistant-panel.is-minimized .panel-header {
-    width: 62px;
-    height: 62px;
+  .assistant-panel.voice-only .mic-button {
+    width: 64px;
+    height: 64px;
+    flex-basis: 64px;
   }
 }
 

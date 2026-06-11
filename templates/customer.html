@@ -10,13 +10,18 @@
   <link rel="stylesheet" href="/static/app.css">
 </head>
 <body class="customer-page">
-  <iframe id="ace-frame" src="/proxy/" title="ACE"></iframe>
+  <iframe
+    id="ace-frame"
+    src="/proxy/"
+    title="ACE"
+    sandbox="allow-downloads allow-forms allow-popups allow-scripts"
+  ></iframe>
 
-  <button id="assistant-launcher" type="button" class="assistant-launcher" aria-label="פתיחת יועץ המכירות" hidden>
+  <button id="assistant-launcher" type="button" class="assistant-launcher" aria-label="פתיחת יועץ קולי" hidden>
     <span>ACE</span>
   </button>
 
-  <aside id="assistant-panel" class="assistant-panel" aria-label="יועץ המכירות של ACE">
+  <aside id="assistant-panel" class="assistant-panel voice-only" aria-label="יועץ המכירות הקולי של ACE">
     <header class="panel-header">
       <div>
         <div class="panel-kicker">ACE</div>
@@ -45,7 +50,7 @@
       </form>
 
       <footer class="voice-row">
-        <button id="mic-button" type="button" class="mic-button" aria-label="התחלת שיחה קולית">
+        <button id="mic-button" type="button" class="mic-button" aria-label="התחלת יועץ קולי">
           <svg viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"></path>
             <path d="M19 11a7 7 0 0 1-14 0"></path>
@@ -58,6 +63,6 @@
     </div>
   </aside>
 
-  <script src="/static/customer.js?v=panel-transcript-4"></script>
+  <script src="/static/customer.js?v=voice-only-2"></script>
 </body>
 </html>
